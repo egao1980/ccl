@@ -367,16 +367,19 @@ MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int f
   /* arm64 Darwin: file MAP_FIXED fails for nonzero file offsets (EINVAL).
      Also W^X rejects RWX.  Commit anon RW, then read like the Windows path.
 
-     Callers pass an OS-page-rounded nbytes (16KiB on Apple Silicon) but the
-     heap image only 4KiB-pads section payloads.  Read until EOF/short count
-     and leave the tail zero (fresh anon pages). */
+     nbytes is the *section payload* size (image sections are 4KiB-padded).
+     OS pages are 16KiB: commit the page-rounded span, but read ONLY nbytes.
+     Reading a 16KiB OS page from a 4KiB-padded section pulls the next
+     image section / trailer ("nepOILCMegam") into the heap free zone and
+     breaks walk-dynamic-area's zero-cons bridge to the sentinel. */
   {
     size_t count, total = 0;
     off_t opos;
+    natural map_bytes = align_to_power_of_2(nbytes, log2_page_size);
 
     (void)permissions;
     opos = LSEEK(fd, 0, SEEK_CUR);
-    if (!CommitMemory(addr, nbytes)) {
+    if (!CommitMemory(addr, map_bytes)) {
       return false;
     }
     if (LSEEK(fd, pos, SEEK_SET) < 0) {

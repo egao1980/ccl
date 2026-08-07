@@ -28,6 +28,17 @@
 #include <limits.h>
 #include <time.h>
 
+/* Darwin arm64 OS pages are 16KiB; image sections are only 4KiB-padded.
+   MapFile there commits the OS-page span but must *read* the section
+   payload size only — see memory.c.  Other platforms still pass the
+   OS-page-rounded length to mmap/MapFile. */
+#if defined(DARWIN) && defined(ARM64)
+#define IMAGE_MAPFILE_NBYTES(mem_size) (mem_size)
+#else
+#define IMAGE_MAPFILE_NBYTES(mem_size) \
+  align_to_power_of_2((mem_size), log2_page_size)
+#endif
+
 
 #if defined(PPC64) || defined(X8632)
 #define RELOCATABLE_FULLTAG_MASK \
@@ -224,7 +235,7 @@ load_image_section(int fd, openmcl_image_section_header *sect)
     if (mem_size != 0) {
       if (!MapFile(pure_space_active,
                    pos,
-                   align_to_power_of_2(mem_size,log2_page_size),
+                   IMAGE_MAPFILE_NBYTES(mem_size),
                    MEMPROTECT_RX,
                    fd)) {
         return;
@@ -239,7 +250,7 @@ load_image_section(int fd, openmcl_image_section_header *sect)
   case AREA_STATIC:
     if (!MapFile(static_space_active,
 		 pos,
-		 align_to_power_of_2(mem_size,log2_page_size),
+		 IMAGE_MAPFILE_NBYTES(mem_size),
 		 MEMPROTECT_RWX,
 		 fd)) {
       return;
@@ -254,7 +265,7 @@ load_image_section(int fd, openmcl_image_section_header *sect)
     a = allocate_dynamic_area(mem_size);
     if (!MapFile(a->low,
 		 pos,
-		 align_to_power_of_2(mem_size,log2_page_size),
+		 IMAGE_MAPFILE_NBYTES(mem_size),
 		 MEMPROTECT_RWX,
 		 fd)) {
       return;
@@ -273,7 +284,7 @@ load_image_section(int fd, openmcl_image_section_header *sect)
                                            log2_page_size);
       if (!MapFile(a->low,
                    pos,
-                   align_to_power_of_2(mem_size,log2_page_size),
+                   IMAGE_MAPFILE_NBYTES(mem_size),
                    MEMPROTECT_RWX,
                    fd)) {
         return;
@@ -324,7 +335,7 @@ load_image_section(int fd, openmcl_image_section_header *sect)
     if (mem_size) {      
       if (!MapFile(a->low,
                    pos,
-                   align_to_power_of_2(mem_size,log2_page_size),
+                   IMAGE_MAPFILE_NBYTES(mem_size),
                    MEMPROTECT_RWX,
                    fd)) {
         return;

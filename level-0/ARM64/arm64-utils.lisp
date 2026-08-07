@@ -186,11 +186,12 @@
     (ref-global imm0 tenured-area)      ; ppc:380
     (cmp imm0 (:$ 0))                   ; ppc:381 (cmpdi cr0)
     (csel a imm0 a (:? ne))             ; ppc:390-391 (if :ne (mr a imm0)) — moved up
-    ;; Force the uuo-alloc-trap by setting allocbase to all ones so
-    ;; that the b.hi will never be taken (nothing is unsigned-higher
-    ;; than all ones).  This gets us a fresh segment, and the cons
-    ;; cell will be guaranteed freshly-allocated.
-    (movn allocbase (:$ 0))             ;all ones
+    ;; Load area.low and fun before the alloc trap — Darwin handle_alloc_trap
+    ;; can clobber volatile arg_y/arg_z (x86 loads area.low before uuo-alloc).
+    (ldr imm5 (:@ a (:$ arm64::area.low))) ; ppc:392
+    (mov fun f)                         ; ppc:389
+    ;; Force uuo-alloc-trap: allocbase = all ones so b.hi is never taken.
+    (movn allocbase (:$ 0))
     (sub allocptr allocptr (:$ (- arm64::cons.size arm64::fulltag-cons)))
     (cmp allocptr allocbase)
     (b.hi @no-trap)
@@ -198,8 +199,6 @@
     @no-trap
     (mov sentinel allocptr)
     (bic allocptr allocptr (:$ arm64::fulltagmask))
-    (mov fun f)                         ; ppc:389 (mr)
-    (ldr imm5 (:@ a (:$ arm64::area.low))) ; ppc:392 (ld imm5 …)
     @loop
     (ldr header (:@ imm5 (:$ 0)))       ; ppc:394
     ;; ppc:395-399 — header-vs-cons discrimination on the header fulltag

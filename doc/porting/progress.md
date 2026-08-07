@@ -32,18 +32,24 @@ kernel past image load into cold load.
   `_SPffcall` treats non-macptr bits as the entry point (fixed subtag
   compare to use `w2`, not stale `imm2`).
 * JIT path (later): Apple `MAP_JIT` + `pthread_jit_write_protect_np` /
-  `pthread_jit_write_with_callback_np` (same model as JSC/V8/Graal/
-  SpiderMonkey) — see Apple “Porting JITs to Apple silicon”. CCL notes
-  already want a separate code-vector / MAP_JIT region on darwinarm64.
+  `pthread_jit_write_with_callback_np` — same model as **LuaJIT /
+  V8 / JSC / CPython copy-and-patch / PyPy / Wasmtime** (see
+  `darwin.md` cross-runtime survey). CCL already wants a separate
+  code-vector / MAP_JIT region on darwinarm64; do **not** MAP_JIT the
+  mixed heap.
 
 ### Current stop
 
-Rebuilt after fixing **empty `arm64-darwin::expand-ff-call`** (returned
-NIL → every `(ff-call …)` under Darwin FTD became literal nil /
-`mov xN,rnil`). Shared AAPCS64 expander now in `arm64::expand-ff-call`.
-Also: acode-rewrite reload after nxenv; `%setf-macptr` restored;
-`%kernel-import` fixnum-locative; `_SPffcall` subtag compare uses `w2`.
-Iterating cold load toward REPL, then tests.
+Past `expand-ff-call` / rwlock. `%walk-dynamic-area` fault was
+**not** primarily the pre-trap clobber (still fixed): heap free zone
+below `allocptr` contained image trailer magic `nepOILCMegam`
+(LE swab of `OpenMCLImage`). Cause: Darwin `MapFile` read
+OS-page-rounded (16KiB) nbytes from a 4KiB-padded section → pulled
+next file bytes into the zero pad that `walk-dynamic-area` walks as
+nil-conses toward the sentinel. Fix: commit 16KiB, read payload only.
+
+Cross-runtime JIT survey (LuaJIT / V8 / JSC / CPython / PyPy) in
+`darwin.md` — reinforces separate `AREA_CODE` + MAP_JIT, not mixed heap.
 
 ### Smoke
 

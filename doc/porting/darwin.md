@@ -78,7 +78,8 @@ time.
 Apple documents the accommodation for dynamic languages at
 https://developer.apple.com/documentation/apple-silicon/porting-just-in-time-compilers-to-apple-silicon.
 
-Practical constraints (also hit by SBCL, V8, OpenJDK, Firefox):
+Practical constraints (also hit by every shipping Darwin/arm64 JIT —
+Lisp, Lua, JS, Python, Wasm):
 
 * Allocate code with `mmap(..., PROT_READ|PROT_WRITE|PROT_EXEC,
   MAP_PRIVATE|MAP_ANON|MAP_JIT, ...)`.  Despite RWX in the call, the
@@ -86,8 +87,12 @@ Practical constraints (also hit by SBCL, V8, OpenJDK, Firefox):
 * Toggle with `pthread_jit_write_protect_np(0)` (write / not exec) and
   `pthread_jit_write_protect_np(1)` (exec / not write); then
   `sys_icache_invalidate`.
-* Officially **one** `MAP_JIT` region per process (with Hardened
-  Runtime + `com.apple.security.cs.allow-jit` when hardened).
+* Hardened Runtime needs `com.apple.security.cs.allow-jit` (or
+  `allow-unsigned-executable-memory`).  Newer hardening:
+  `jit-write-allowlist` → must use `pthread_jit_write_with_callback_np`
+  instead of the toggle API.
+* Officially **one** `MAP_JIT` region per process under Hardened Runtime
+  (practice varies; V8 registers multiple pages via ThreadIsolation).
 * `MAP_JIT|MAP_FIXED` is rejected (EINVAL) — cannot pin the JIT region
   at `IMAGE_BASE_ADDRESS`.
 * File-backed `mmap`+`MAP_FIXED` with a **nonzero file offset** also
@@ -95,6 +100,22 @@ Practical constraints (also hit by SBCL, V8, OpenJDK, Firefox):
   `read` instead (same idea as the Windows `MapFile` path).
 * `mrs ctr_el0` for I-cache line size SIGILLs at EL0 on Apple Silicon;
   use `sys_icache_invalidate` instead.
+
+### Cross-runtime survey (not Lisp-only)
+
+| Runtime | Pattern | Takeaway for CCL |
+| --- | --- | --- |
+| **LuaJIT** (`lj_mcode.c`, `LUAJIT_ENABLE_OSX_HRT`) | Dedicated mcode arena: `MAP_JIT` + `pthread_jit_write_protect_np` around emit; `mprotect` still used in some paths. Hardened Runtime without MAP_JIT → `SIGKILL` / codesign invalid page. | Code-only arena; never MAP_JIT the GC heap. |
+| **V8** (`code-memory-access.h`) | APRR/`MAP_JIT` scope: thread defaults RX; `WritableJitAllocation` flips WP for the write window; ThreadIsolation validates writes. Assumes `allow-jit`. | Same: scoped WP around compile, not heap-wide. |
+| **JSC / BrowserEngineKit** | `be_memory_inline_jit_restrict_rwx_to_{rw,rx}_with_witness`; arm64e PAC on JIT pointers; write API must be **inlined** into the compiler critical section. | Callback/allowlist path is the long-term Apple direction. |
+| **SpiderMonkey / Wasmtime** | Same MAP_JIT + protect/callback; Wasmtime discussion: only mark **code** maps MAP_JIT, not general mmap. | Reinforces separate `AREA_CODE`. |
+| **CPython copy-and-patch JIT** (`Python/jit.c`) | `MAP_JIT`+`PROT_EXEC` at alloc; `pthread_jit_write_protect_np(0)` around stitch, `(1)` before mark-exec; skip `mprotect` when MAP_JIT. | Smallest “real” JIT — good template for CCL’s code-vector writer. |
+| **PyPy / RPython** (`rlib/rmmap.py`) | `pthread_jit_write_protect_np` **only** on darwin+arm64 (x86 Darwin must not bind the symbol on older macOS). | Gate on `darwin && arm64`, not bare Darwin. |
+
+Common failure modes mirrored across all of them: (1) MAP_JIT without WP
+toggle under Hardened Runtime → killed; (2) WP on a mixed code+data
+region → store while RX / exec while RW; (3) forgetting `sys_icache_invalidate`;
+(4) entitlements missing when codesigned with `--options runtime`.
 
 CCL traditionally mixes code and data in one dynamic area.  That fights
 per-thread WP on a single MAP_JIT region (a store from RX code into the
@@ -113,7 +134,10 @@ dynamic code still needs MAP_JIT / a separate code area.
 ## Workarounds researched (2026-08)
 
 Sources: Clozure/ccl#11 (xrme / mdbergmann), Apple JIT porting guide + DTS,
-SBCL `darwin-jit`, Clasp/V8/Wasmtime/Firefox, Kyle Avery JIT notes.
+SBCL `darwin-jit`, Clasp; LuaJIT #1334 / `LUAJIT_ENABLE_OSX_HRT`; V8
+`code-memory-access.h`; JSC BrowserEngineKit witness APIs; CPython
+`Python/jit.c` (GH-126195); PyPy `rmmap.py` (darwin+arm64 only);
+Wasmtime MAP_JIT issues; Kyle Avery JIT notes.
 
 ### W^X — do not MAP_JIT the mixed heap
 
