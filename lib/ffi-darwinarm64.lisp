@@ -12,6 +12,14 @@
 ;;; (ff-call …) under the Darwin FTD became literal NIL — cold-load
 ;;; %MAKE-RWLOCK-PTR then did `mov xN,rnil` + trap-unless-macptr.
 
+;;; Reuse Linux AAPCS64 callback generators until Darwin-specific
+;;; packing (variadic-on-stack, natural-size slots) is wired.  Ensures
+;;; ARM64-LINUX package + definitions exist when only Darwin is loaded.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (unless (find-package "ARM64-LINUX")
+    (make-package "ARM64-LINUX" :use '("CL" "CCL")))
+  (require "FFI-LINUXARM64"))
+
 (defun arm64-darwin::record-type-returns-structure-as-first-arg (rtype)
   (arm64::record-type-returns-structure-as-first-arg rtype))
 
@@ -28,24 +36,14 @@
                          :arg-coerce arg-coerce
                          :result-coerce result-coerce))
 
-;;; Return 7 values:
-;;; A list of RLET bindings
-;;; A list of LET* bindings
-;;; A list of DYNAMIC-EXTENT declarations for the LET* bindings
-;;; A list of initializaton forms for (some) structure args
-;;; A FOREIGN-TYPE representing the "actual" return type.
-;;; A form which can be used to initialize FP-ARGS-PTR, relative
-;;;  to STACK-PTR. (This unused on some platforms.)
-;;; The byte offset of the foreign return address, relative to STACK-PTR
 (defun arm64-darwin::generate-callback-bindings (stack-ptr fp-args-ptr
                                                  argvars argspecs result-spec
                                                  struct-result-name)
-  (declare (ignore stack-ptr fp-args-ptr argvars argspecs result-spec
-                   struct-result-name))
-  (error "arm64-darwin::generate-callback-bindings not yet implemented"))
+  (arm64-linux::generate-callback-bindings
+   stack-ptr fp-args-ptr argvars argspecs result-spec struct-result-name))
 
 (defun arm64-darwin::generate-callback-return-value (stack-ptr fp-args-ptr
                                                      result return-type
                                                      struct-return-arg)
-  (declare (ignore stack-ptr fp-args-ptr result return-type struct-return-arg))
-  (error "arm64-darwin::generate-callback-return-value not yet implemented"))
+  (arm64-linux::generate-callback-return-value
+   stack-ptr fp-args-ptr result return-type struct-return-arg))
