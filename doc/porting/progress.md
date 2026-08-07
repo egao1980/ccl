@@ -1,5 +1,49 @@
 # Progress notes on an arm64 port
 
+## August 2026 — Darwin/arm64 boot image (egao1980)
+
+Built `arm64-boot.image` via host CCL 1.13 (Rosetta) and got the native
+kernel past image load into cold load.
+
+### Bootstrap (host)
+
+* Stock 1.13 lacks `aapcs64-ff-call` / `arm64-lap-function` nx1 hook —
+  load arm64-branch `nxenv.lisp`, `backend.lisp`, `nx1.lisp` first
+  (`tools/bootstrap-darwinarm64-boot.lisp`).
+* `tools/xdarwinarm64.lisp` must load `compile-ccl.lisp` (not fasl) and
+  patch arch `nil-value` to Darwin static layout.
+
+### Kernel / image load (Darwin W^X + ASLR)
+
+* Static/image bases cannot sit in low memory. Darwin uses
+  `STATIC_BASE_ADDRESS=#x200000000`, `IMAGE_BASE=#x300000000000`
+  (platform-darwinarm64.h + xarm64fasload darwin backend).
+* File `mmap`+`MAP_FIXED` fails for nonzero file offsets → `MapFile`
+  uses anon commit + `read` (Windows-style).
+* Heap mapped RW (no RWX); dynamic/pure `mprotect` RX after load.
+* `mrs ctr_el0` SIGILL on Apple Silicon → `sys_icache_invalidate`.
+* Darwin `arm64-trap-support` xp accessors use measured ucontext offsets
+  (not Linux `mcontext.regs`).
+
+### Current stop
+
+```
+FATAL (cold load, no lisp error system): unhandled read fault
+  fault address 0x30200000c210
+```
+
+Image loads; cold load dies on a heap read. Still open: MAP_JIT for
+runtime code mutation, Mach exception server, real darwin-arm64-headers
+CDBs (provisional x86 copy), full rnil redesign.
+
+### Smoke
+
+```
+make -C lisp-kernel/darwinarm64
+# host: arch -x86_64 ./dx86cl64 --no-init --batch < tools/bootstrap-darwinarm64-boot.lisp
+./darm64cl --image-name arm64-boot.image
+```
+
 ## August 2026 — Darwin/arm64 kernel scaffold (egao1980)
 
 Started Apple Silicon kernel bring-up on top of the `arm64` branch
@@ -31,7 +75,7 @@ platforms will stop supporting the TBI (top byte ignore) feature that
 the high tag scheme depends on.
 
 I used the [ccl-ffigen](https://github.com/Clozure/ccl-ffigen) tool
-to process `.h` files.  This worked; the `.ffi` files will need to be
+to process `.h` files.  The `.ffi` files will need to be
 translated by Lisp code into the `.cdb` files that the `#_` and `#$`
 reader macros consult.
 

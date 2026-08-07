@@ -425,6 +425,12 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
           relocate_area_contents(a, bias);
           ProtectMemory(a->low, a->active-a->low);
         }
+#if defined(DARWIN) && defined(ARM64)
+        /* Mapped RW due to W^X; pure code needs RX. */
+        if (a->active > a->low) {
+          mprotect(a->low, a->active - a->low, PROT_READ|PROT_EXEC);
+        }
+#endif
         readonly_area = a;
 	add_area_holding_area_lock(a);
 	break;
@@ -456,6 +462,13 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
           relocate_area_contents(a, bias);
         }
 	resize_dynamic_heap(a->active, lisp_heap_gc_threshold);
+#if defined(DARWIN) && defined(ARM64)
+        /* Mapped RW due to W^X; make level-0 code executable.  Later
+           code allocation still needs MAP_JIT (doc/porting/darwin.md). */
+        if (a->active > a->low) {
+          mprotect(a->low, a->active - a->low, PROT_READ|PROT_EXEC);
+        }
+#endif
 	xMakeDataExecutable(a->low, a->active - a->low);
 	break;
       }

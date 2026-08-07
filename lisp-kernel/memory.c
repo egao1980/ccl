@@ -148,7 +148,12 @@ CommitMemory (LogicalAddress start, natural len)
   void *addr;
 
   for (i = 0; i < 3; i++) {
+#if defined(DARWIN) && defined(ARM64)
+    /* W^X: RWX mmap is rejected; map RW and mprotect RX later if needed. */
+    addr = mmap(start, len, MEMPROTECT_RW, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
+#else
     addr = mmap(start, len, MEMPROTECT_RWX, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
+#endif
     if (addr == start) {
       return true;
     } else {
@@ -217,7 +222,11 @@ MapMemoryForStack(natural nbytes)
 #ifdef WINDOWS
   return VirtualAlloc(0, nbytes, MEM_RESERVE|MEM_COMMIT, MEMPROTECT_RWX);
 #else
+#if defined(DARWIN) && defined(ARM64)
+  return mmap(NULL, nbytes, MEMPROTECT_RW, MAP_PRIVATE|MAP_ANON, -1, 0);
+#else
   return mmap(NULL, nbytes, MEMPROTECT_RWX, MAP_PRIVATE|MAP_ANON, -1, 0);
+#endif
 #endif
 }
 
@@ -338,7 +347,34 @@ MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int f
   return true;
 #endif
 #else
+#if defined(DARWIN) && defined(ARM64)
+  /* arm64 Darwin: file MAP_FIXED fails for nonzero file offsets (EINVAL).
+     Also W^X rejects RWX.  Commit anon RW, then read like the Windows path. */
+  {
+    size_t count, total = 0;
+    off_t opos;
+
+    (void)permissions;
+    opos = LSEEK(fd, 0, SEEK_CUR);
+    if (!CommitMemory(addr, nbytes)) {
+      return false;
+    }
+    if (LSEEK(fd, pos, SEEK_SET) < 0) {
+      return false;
+    }
+    while (total < nbytes) {
+      count = read(fd, ((char *)addr) + total, nbytes - total);
+      if (!(count > 0)) {
+        return false;
+      }
+      total += count;
+    }
+    LSEEK(fd, opos, SEEK_SET);
+    return true;
+  }
+#else
   return mmap(addr, nbytes, permissions, MAP_PRIVATE|MAP_FIXED, fd, pos) != MAP_FAILED;
+#endif
 #endif
 }
 

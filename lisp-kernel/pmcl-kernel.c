@@ -34,6 +34,10 @@
 #include <unistd.h>
 #endif
 
+#if defined(DARWIN) && defined(ARM64)
+#include <libkern/OSCacheControl.h>
+#endif
+
 #ifdef LINUX
 #ifdef __GLIBC__
 #include <mcheck.h>
@@ -2252,6 +2256,13 @@ xMakeDataExecutable(BytePtr start, natural nbytes)
      nothing initialises it on this target, so it would keep its 32
      default, and thread_manager.c uses it as a lock *padding* granule,
      which is not the same quantity as a maintenance granule.  */
+#if defined(DARWIN)
+  /* Apple Silicon: CTR_EL0 is not readable at EL0 (SIGILL). Use the
+     Darwin libkern helper instead of mrs + flush_cache_lines. */
+  if (nbytes) {
+    sys_icache_invalidate(start, nbytes);
+  }
+#else
   {
     extern void flush_cache_lines(natural, natural, natural);
     natural ustart = (natural) start, base, end, ctr, dline, iline, linesize;
@@ -2265,6 +2276,7 @@ xMakeDataExecutable(BytePtr start, natural nbytes)
     end = (ustart + nbytes + linesize - 1) & ~(linesize-1);
     flush_cache_lines(base, (end-base)/linesize, linesize);
   }
+#endif
 #endif
 }
 

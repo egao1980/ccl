@@ -32,6 +32,16 @@ typedef ucontext_t ExceptionInformation;
 #include "lisptypes.h"
 #include "arm64-constants.h"
 
+/*
+ * Low addresses (0x12000 / 0x03fff000) cannot be MAP_FIXED on arm64
+ * Darwin (EINVAL).  Use a high address that mmap FIXED RW accepts.
+ * Must match xdump/xarm64fasload.lisp *darwinarm64-xload-backend*
+ * :static-space-address and the arch nil-value patched in
+ * tools/xdarwinarm64.lisp (nil = STATIC_BASE + 4K + fulltag_nil).
+ */
+#undef STATIC_BASE_ADDRESS
+#define STATIC_BASE_ADDRESS 0x0000000200000000ULL
+
 #ifndef TCR_BIAS
 #define TCR_BIAS (0)
 #endif
