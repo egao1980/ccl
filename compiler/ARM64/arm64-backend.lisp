@@ -431,7 +431,52 @@
                               &key
                                 (arg-coerce #'null-coerce-foreign-arg)
                                 (result-coerce #'null-coerce-foreign-result))
-  (declare (ignore callform args arg-coerce result-coerce)))
+  "Shared AAPCS64 ff-call expander (Linux + Darwin).
+Darwin variadic/stack-packing divergences are not handled here yet —
+cold-load / kernel-import calls are fixed-arity."
+  (let* ((result-type-spec (or (car (last args)) :void)))
+    (multiple-value-bind (result-type error)
+        (ignore-errors (parse-foreign-type result-type-spec))
+      (if error
+        (setq result-type-spec :void result-type *void-foreign-type*)
+        (setq args (butlast args)))
+      (collect ((argforms))
+        (when (eq (car args) :monitor-exception-ports)
+          (argforms (pop args)))
+        (when (typep result-type 'foreign-record-type)
+          (setq result-type *void-foreign-type*
+                result-type-spec :void)
+          (argforms :address)
+          (argforms (pop args)))
+        (unless (evenp (length args))
+          (error "~s should be an even-length list of alternating foreign types and values" args))
+        (do* ((args args (cddr args)))
+             ((null args))
+          (let* ((arg-type-spec (car args))
+                 (arg-value-form (cadr args)))
+            (if (or (member arg-type-spec *foreign-representation-type-keywords*
+                            :test #'eq)
+                    (typep arg-type-spec 'unsigned-byte))
+              (progn
+                (argforms arg-type-spec)
+                (argforms arg-value-form))
+              (let* ((ftype (parse-foreign-type arg-type-spec)))
+                (if (typep ftype 'foreign-record-type)
+                  (let* ((bits (ensure-foreign-type-bits ftype)))
+                    (cond ((<= bits 64)
+                           (argforms :unsigned-doubleword)
+                           (argforms `(%%get-unsigned-longlong ,arg-value-form 0)))
+                          ((<= bits 128)
+                           (argforms (ceiling bits 64))
+                           (argforms arg-value-form))
+                          (t
+                           (argforms :address)
+                           (argforms arg-value-form))))
+                  (progn
+                    (argforms (foreign-type-to-representation-type ftype))
+                    (argforms (funcall arg-coerce arg-type-spec arg-value-form))))))))
+        (argforms (foreign-type-to-representation-type result-type))
+        (funcall result-coerce result-type-spec `(,@callform ,@(argforms)))))))
 
 ;;; A resident (native) arm64 compiler is DEMAND-LOADED module by module,
 ;;; not dumped into the image the way the ppc/x86 ones are, so nothing pulls

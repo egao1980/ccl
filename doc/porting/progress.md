@@ -38,8 +38,12 @@ kernel past image load into cold load.
 
 ### Current stop
 
-Rebuilt after the `rnil`/`acode-rewrite` + `%setf-macptr` + ffcall
-fixes; iterating cold load toward REPL, then tests.
+Rebuilt after fixing **empty `arm64-darwin::expand-ff-call`** (returned
+NIL → every `(ff-call …)` under Darwin FTD became literal nil /
+`mov xN,rnil`). Shared AAPCS64 expander now in `arm64::expand-ff-call`.
+Also: acode-rewrite reload after nxenv; `%setf-macptr` restored;
+`%kernel-import` fixnum-locative; `_SPffcall` subtag compare uses `w2`.
+Iterating cold load toward REPL, then tests.
 
 ### Smoke
 
