@@ -48,6 +48,18 @@ OS-page-rounded (16KiB) nbytes from a 4KiB-padded section → pulled
 next file bytes into the zero pad that `walk-dynamic-area` walks as
 nil-conses toward the sentinel. Fix: commit 16KiB, read payload only.
 
+**W^X bring-up:** dual-map RX alias at `VA+HEAP_EXEC_BIAS`
+(`mach_vm_remap` + NX→RX redirect in `handle_protection_violation`).
+Cold load then died executing the `rename-package` docstring: GC was
+not updating RX-biased PC/LR/`savelr` locatives, so `RET` after
+compaction landed in reused heap. Fix: unbias/rebias in
+`mark_pc_root` / `locative_forwarding_address` / purify/impurify
+locref paths (`arm64-gc.c`).
+
+**Now:** past `l1-clos-boot` through streams/files/typesys; dies in
+`l1-lisp-threads.da64fsl` with unhandled write to `0x3fdf`
+(`str w0,[x1]`, x1=0x3fdf) at RX pc.
+
 Cross-runtime JIT survey (LuaJIT / V8 / JSC / CPython / PyPy) in
 `darwin.md` — reinforces separate `AREA_CODE` + MAP_JIT, not mixed heap.
 

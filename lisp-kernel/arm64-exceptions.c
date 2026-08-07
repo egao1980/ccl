@@ -1054,6 +1054,171 @@ is_write_fault(ExceptionInformation *xp, siginfo_t *info)
 
 static OSStatus pv_cold_load_fatal(ExceptionInformation *xp, BytePtr addr,
                                    Boolean is_write);
+static void cold_load_dump_frame(ExceptionInformation *xp);
+
+#if defined(DARWIN) && defined(ARM64)
+/* Walk back from a heap PC looking for a 32-bit ivector header whose
+   payload covers that PC.  Headers are 16-byte-aligned; tagged
+   code-vector entry points are header+12 (low nibble fulltag_misc). */
+static Boolean
+darwin_arm64_pc_in_code_vector(natural pcval)
+{
+  natural probe, header, count, data_start, data_end;
+  unsigned st;
+  int i;
+
+  if (pcval < (natural)IMAGE_BASE_ADDRESS) {
+    return false;
+  }
+
+  /* Fast path: tagged misc pointer (normal code-vector entry). */
+  if ((pcval & fulltagmask) == fulltag_misc) {
+    natural p, nest_end;
+
+    header = *(natural *)(pcval - fulltag_misc);
+    st = (unsigned)(header & subtagmask);
+    if (st != subtag_code_vector && st != subtag_xcode_vector) {
+      return false;
+    }
+    count = header >> num_subtag_bits;
+    if (count < 2 || count > (1u << 20)) {
+      return false;
+    }
+    /* element 0 (udf #0 sentinel) sits one 32-bit word before the entry */
+    if (*(unsigned *)(pcval - 4) != 0) {
+      return false;
+    }
+    data_start = (pcval - fulltag_misc) + node_size;
+    data_end = data_start + (count * 4);
+    /* Reject extents that swallow the next heap object (seen: a
+       code-vector header whose count overlaps a following docstring;
+       dual-map then lets us "execute" the string as UUOs). */
+    nest_end = data_end;
+    for (p = ((pcval - fulltag_misc) + 16) & ~(natural)15;
+         p + node_size < data_end;
+         p += 16) {
+      natural nh = *(natural *)p;
+      unsigned nst = (unsigned)(nh & subtagmask);
+      natural ncount = nh >> num_subtag_bits;
+      if (nst == subtag_simple_base_string &&
+          ncount >= 1 && ncount < 0x10000) {
+        unsigned *chars = (unsigned *)(p + node_size);
+        if (chars[0] >= 0x20 && chars[0] < 0x7f) {
+          nest_end = p;
+          break;
+        }
+      }
+    }
+    if (pcval >= nest_end) {
+      return false;
+    }
+    return true;
+  }
+
+  /* Interior PC: require a plausible nearby code-vector header whose
+     payload covers PC.  Cap extent so a forged header with a huge
+     element count cannot claim unrelated heap (e.g. docstrings). */
+  probe = pcval & ~(natural)15;
+  for (i = 0; i < 64; i++) {
+    if (probe < (natural)IMAGE_BASE_ADDRESS) {
+      break;
+    }
+    header = *(natural *)probe;
+    st = (unsigned)(header & subtagmask);
+    if (st == subtag_code_vector || st == subtag_xcode_vector) {
+      count = header >> num_subtag_bits;
+      if (count >= 2 && count <= (1u << 20) &&
+          (*(unsigned *)(probe + node_size) == 0)) {
+        natural p, nest_end;
+        data_start = probe + node_size;
+        data_end = data_start + (count * 4);
+        nest_end = data_end;
+        for (p = (probe + 16) & ~(natural)15;
+             p + node_size < data_end;
+             p += 16) {
+          natural nh = *(natural *)p;
+          unsigned nst = (unsigned)(nh & subtagmask);
+          natural ncount = nh >> num_subtag_bits;
+          if (nst == subtag_simple_base_string &&
+              ncount >= 1 && ncount < 0x10000) {
+            unsigned *chars = (unsigned *)(p + node_size);
+            if (chars[0] >= 0x20 && chars[0] < 0x7f) {
+              nest_end = p;
+              break;
+            }
+          }
+        }
+        if (pcval >= data_start && pcval < nest_end &&
+            (nest_end - data_start) <= (4u << 20)) {
+          return true;
+        }
+      }
+    }
+    probe -= 16;
+  }
+  return false;
+}
+
+static void
+darwin_arm64_describe_pc_object(natural pcval)
+{
+  natural probe = pcval & ~(natural)15;
+  int i;
+
+  fprintf(dbgout, "  pc-object scan:");
+  for (i = 0; i < 8; i++) {
+    if (probe < (natural)IMAGE_BASE_ADDRESS) {
+      break;
+    }
+    {
+      natural header = *(natural *)probe;
+      unsigned st = (unsigned)(header & subtagmask);
+      natural count = header >> num_subtag_bits;
+      fprintf(dbgout, "\n    hdr@0x%lx subtag=0x%x count=%lu",
+              (unsigned long)probe, st, (unsigned long)count);
+      if (st == subtag_simple_base_string) {
+        natural j, n = count < 64 ? count : 64;
+        unsigned *chars = (unsigned *)(probe + node_size);
+        fprintf(dbgout, " string=\"");
+        for (j = 0; j < n; j++) {
+          unsigned c = chars[j];
+          fputc((c >= 0x20 && c < 0x7f) ? (int)c : '?', dbgout);
+        }
+        fprintf(dbgout, "\"");
+      }
+    }
+    probe -= 16;
+  }
+  fprintf(dbgout, "\n");
+  fflush(dbgout);
+}
+
+static void
+darwin_arm64_describe_fn(LispObj fn)
+{
+  if (fulltag_of(fn) != fulltag_misc) {
+    fprintf(dbgout, "  fn 0x%lx not misc (tag %u)\n",
+            (unsigned long)fn, (unsigned)fulltag_of(fn));
+    return;
+  }
+  {
+    natural header = header_of(fn);
+    unsigned st = (unsigned)header_subtag(header);
+    LispObj cv = deref(fn, 1); /* function.code_vector @ slot 1 */
+
+    fprintf(dbgout,
+            "  fn 0x%lx subtag=0x%x code_vector=0x%lx\n",
+            (unsigned long)fn, st, (unsigned long)cv);
+    if (fulltag_of(cv) == fulltag_misc) {
+      natural ch = header_of(cv);
+      fprintf(dbgout, "    cv subtag=0x%x count=%lu\n",
+              (unsigned)header_subtag(ch),
+              (unsigned long)(ch >> num_subtag_bits));
+    }
+  }
+  fflush(dbgout);
+}
+#endif
 
 OSStatus
 handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr, int old_valence)
@@ -1089,7 +1254,12 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
   /* Instruction fetch from the RW lisp heap: restart at the RX dual-map
      alias (HEAP_EXEC_BIAS).  ESR EC 0x20/0x21 = insn abort.  Matching
      PC==FAR catches NX on the canonical VA without needing to parse
-     every call site. */
+     every call site.
+
+     Dual-map makes ALL committed heap pages executable at +bias, so a
+     bad jump into a string/vector would otherwise "run" ASCII as udf
+     UUOs (e.g. 'n'=0x6e = binary vector_bounds).  Only redirect when
+     PC falls inside a code-vector / xcode-vector. */
   if (xp) {
     natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
     unsigned ec = (unsigned)((esr >> 26) & 0x3f);
@@ -1099,8 +1269,24 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
         pcval == far &&
         pcval >= (natural)IMAGE_BASE_ADDRESS &&
         pcval < ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
-      set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
-      return 0;
+      if (darwin_arm64_pc_in_code_vector(pcval)) {
+        set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
+        return 0;
+      }
+      fprintf(dbgout,
+              "\nFATAL (cold load): NX fetch into non-code at 0x%lx\n",
+              (unsigned long)pcval);
+      cold_load_dump_frame(xp);
+      darwin_arm64_describe_pc_object(pcval);
+      darwin_arm64_describe_fn(xpGPR(xp, 7));
+      _exit(157);
+      fprintf(dbgout,
+              "\nFATAL (cold load): NX fetch into non-code at 0x%lx\n",
+              (unsigned long)pcval);
+      cold_load_dump_frame(xp);
+      darwin_arm64_describe_pc_object(pcval);
+      darwin_arm64_describe_fn(xpGPR(xp, 7));
+      _exit(157);
     }
   }
 #endif
@@ -1402,12 +1588,22 @@ static OSStatus
 uuo_cold_load_fatal(ExceptionInformation *xp, pc where, opcode the_uuo,
                     const char *what, unsigned gpr)
 {
+  natural pcval = (natural)where;
+
   fprintf(dbgout, "\nFATAL (cold load, no lisp error system): %s --", what);
   uuo_describe_symbol(xpGPR(xp, gpr));
   fprintf(dbgout, "\n  at pc 0x%lx, uuo 0x%08x, x%u = 0x%lx\n",
-          (unsigned long)(natural)where, the_uuo, gpr,
+          (unsigned long)pcval, the_uuo, gpr,
           (unsigned long)xpGPR(xp, gpr));
   cold_load_dump_frame(xp);
+#if defined(DARWIN) && defined(ARM64)
+  if (pcval >= ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
+    pcval -= (natural)HEAP_EXEC_BIAS;
+  }
+  darwin_arm64_describe_pc_object(pcval);
+  darwin_arm64_describe_fn(xpGPR(xp, 7));
+  darwin_arm64_describe_fn(xpGPR(xp, 14)); /* nfn = temp2 */
+#endif
   _exit(157);
   return -1;                      /* not reached */
 }
