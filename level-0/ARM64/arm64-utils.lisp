@@ -15,11 +15,16 @@
 ;;; =====================================================================
 ;;; offset is a boxed fixnum, one of the target::kernel-import-xxx BYTE
 ;;; offsets; unboxing yields the raw byte offset.
+;;; Return a BOXED FIXNUM holding the import address (x86/PPC contract).
+;;; Returning a raw pointer in a node reg made ff-call/%get-ptr treat it
+;;; as a lisp object — and cross-compile paths sometimes collapsed the
+;;; whole (ff-call (%kernel-import …) :address) to NIL.
 (defarm64lapfunction %kernel-import ((offset arg_z))
   (ref-global imm0 kernel-imports)      ; ppc:621
   (unbox-fixnum imm1 arg_z)             ; ppc:622
-  (ldr arg_z (:@ imm0 imm1))            ; ppc:623 (ldrx)
-  (ret))                                ; ppc:624
+  (ldr imm0 (:@ imm0 imm1))             ; load C function pointer
+  (box-fixnum arg_z imm0)               ; match x86-utils:525-526
+  (ret))
 
 ;;; =====================================================================
 ;;; %get-unboxed-ptr — ppc:626

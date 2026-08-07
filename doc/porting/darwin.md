@@ -100,8 +100,15 @@ CCL traditionally mixes code and data in one dynamic area.  That fights
 per-thread WP on a single MAP_JIT region (a store from RX code into the
 same region needs RW).  Upstream direction (see Clozure/ccl#11 discussion):
 a separate code area / code-vector slot (SBCL-style), not “MAP_JIT the
-whole heap”.  Until that exists, boot can `mprotect` loaded level-0
-pages RX after image load; runtime code mutation still needs MAP_JIT.
+whole heap”.
+
+**Bring-up lesson:** do **not** `mprotect` the whole dynamic area RX after
+image load.  Boot code runs from pure/readonly (RX is fine there) and from
+kernel subprims; heap stores (`SPgvset`, cons init) must keep dynamic RW.
+With dynamic RX, `handle_alloc_trap` succeeds then `SPgvset` takes
+`EXC_BAD_ACCESS` and cold-load misreports a nested “read” fault (Darwin
+`si_code` ≠ Linux `SEGV_ACCERR` — use ESR.WnR).  Runtime mutation of
+dynamic code still needs MAP_JIT / a separate code area.
 
 ## Workarounds researched (2026-08)
 

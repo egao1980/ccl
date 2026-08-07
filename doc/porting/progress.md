@@ -28,24 +28,22 @@ kernel past image load into cold load.
 ### Current stop
 
 ```
-FATAL (cold load, no lisp error system): unhandled read fault
-  fault address 0x30200000c210
+FATAL (cold load, no lisp error system): wrong type … macptr
+  — non-symbol value 0x20000100b (nil)
 ```
 
-Under lldb: `EXC_BAD_INSTRUCTION` at pure PC (`udf #4` = intentional
-UUO). Without lldb: SIGILL handler path likely mis-reads Darwin
-ucontext → nested “unhandled read fault”. See
-`doc/porting/darwin.md` § Workarounds researched.
+in `%MAKE-RWLOCK-PTR`: after `make-gcable-macptr`,
+`(ff-call (%kernel-import rwlock-new) :address)` is compiling/running
+as if the import were **nil** (`mov x9, rnil` then trap-unless-macptr).
+`udf #4` alloc traps and Unix SIGILL delivery work.
 
-**Next (priority):**
+**Done this step:** removed dynamic-area RX (was `SPgvset` W^X → nested
+“read” fault); Darwin `is_write_fault` uses ESR.WnR; `%kernel-import`
+boxes the address like x86.
 
-1. Prove SIGILL delivery + correct `xpPC`/`xpGPRvector` (lldb
-   `ignored-exceptions EXC_BAD_INSTRUCTION`; dump `__ss.__pc` in handler;
-   recursion guard).
-2. Get `handle_uuo` for `udf #4` without nested fault.
-3. W^X for runtime: prefer separate code area (Clozure#11 / SBCL);
-   `mach_vm_remap` dual-map is a bring-up escape hatch.
-4. Mach exception server; real darwin-arm64-headers; rnil redesign.
+**Next:** why `%kernel-import` / `aapcs64-ff-call` collapses to nil in
+`%make-rwlock-ptr` (import table / `ref-global` / nx1); then Mach,
+MAP_JIT/code-area, headers.
 
 ### Smoke
 

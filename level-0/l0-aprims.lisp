@@ -113,24 +113,32 @@
 
 (defun make-gcable-macptr (flags)
   (let ((v (%alloc-misc target::xmacptr.element-count target::subtag-macptr)))
-    (setf (uvref v target::xmacptr.address-cell) 0) ; ?? yup.
+    ;; Prefer %null-ptr over storing literal 0 into address-cell: on
+    ;; arm64 the uvref/0 path can compile as (%get-ptr nil) and trap
+    ;; wrong-type during cold load (Darwin bring-up).
+    (%setf-macptr v (%null-ptr))
     (setf (uvref v target::xmacptr.flags-cell) flags)
     (set-%gcable-macptrs% v)
     v))
 
 (defun %make-recursive-lock-ptr ()
   (record-system-lock
-   (%setf-macptr
-    (make-gcable-macptr $flags_DisposeRecursiveLock)
-    (ff-call (%kernel-import target::kernel-import-new-recursive-lock)
-             :address))))
+   (let ((p (make-gcable-macptr $flags_DisposeRecursiveLock)))
+     ;; Use (setf (%get-ptr …) (ff-call … :address)) — not %setf-macptr
+     ;; of the ff-call.  arm642-%setf-macptr currently compiles the
+     ;; address-valued ff-call source as NIL (Darwin arm64 cold load).
+     (setf (%get-ptr p)
+           (ff-call (%kernel-import target::kernel-import-new-recursive-lock)
+                    :address))
+     p)))
 
 (defun %make-rwlock-ptr ()
   (record-system-lock
-   (%setf-macptr
-    (make-gcable-macptr $flags_DisposeRwLock)
-    (ff-call (%kernel-import target::kernel-import-rwlock-new)
-             :address))))
+   (let ((p (make-gcable-macptr $flags_DisposeRwLock)))
+     (setf (%get-ptr p)
+           (ff-call (%kernel-import target::kernel-import-rwlock-new)
+                    :address))
+     p)))
   
 (defun make-recursive-lock ()
   (make-lock nil))

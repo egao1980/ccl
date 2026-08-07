@@ -468,13 +468,14 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
         }
 	resize_dynamic_heap(a->active, lisp_heap_gc_threshold);
 #if defined(DARWIN) && defined(ARM64)
-        /* Mapped RW due to W^X; make level-0 code executable.  Later
-           code allocation still needs MAP_JIT (doc/porting/darwin.md).
-           Length must be OS-page-aligned (16KiB on Apple Silicon). */
-        if (a->active > a->low) {
-          natural span = align_to_power_of_2(a->active - a->low, log2_page_size);
-          mprotect(a->low, span, PROT_READ|PROT_EXEC);
-        }
+        /* Do NOT mprotect the dynamic area RX.  It holds mixed code and
+           data; RX makes every heap store (SPgvset, cons init, …) fault
+           with EXC_BAD_ACCESS while subprims in the kernel still run
+           (observed: handle_alloc_trap succeeds, then SPgvset faults on
+           0x3020… and cold-load reports a nested “read” fault).
+           Pure/readonly above is RX for boot code.  Runtime code in
+           dynamic still needs MAP_JIT / a separate code area
+           (doc/porting/darwin.md). */
 #endif
 	xMakeDataExecutable(a->low, a->active - a->low);
 	break;

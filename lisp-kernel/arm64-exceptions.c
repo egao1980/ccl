@@ -1030,11 +1030,20 @@ is_write_fault(ExceptionInformation *xp, siginfo_t *info)
 {                                 /* ppc-exceptions.c:866-925 */
   /* ppc:869-885: use the siginfo.  Linux delivers write-protection
      faults as SIGSEGV with SEGV_ACCERR in the low bits of si_code.
-     ARM64-DEVIATION: the non-siginfo fallback read PPC's DSISR bit 25 /
-     TRAP=0x300 (ppc:886-895); AArch64's mcontext has no fault-status
-     register (the ESR lives in an optional esr_context extension that
-     older kernels omit), so there is no register fallback — Linux
-     sigaction with SA_SIGINFO always supplies info. */
+     ARM64-DEVIATION: Darwin surfaces ESR in uc_mcontext->__es.__esr.
+     Data-abort ISS bit 6 (WnR) discriminates write vs read; without it
+     Darwin often delivers RX-store faults as SIGBUS and the Linux
+     SIGSEGV+SEGV_ACCERR test mis-classifies them as reads. */
+#if defined(DARWIN) && defined(ARM64)
+  if (xp) {
+    natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
+    unsigned ec = (unsigned)((esr >> 26) & 0x3f);
+    /* EC 0x24/0x25 = Data Abort (lower/current EL) */
+    if (ec == 0x24 || ec == 0x25) {
+      return ((esr & (1u << 6)) != 0); /* ISS.WnR */
+    }
+  }
+#endif
   if (info) {
     return ((info->si_signo == SIGSEGV) &&
             ((info->si_code & 0xff) == (SEGV_ACCERR & 0xff)));
