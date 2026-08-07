@@ -1085,6 +1085,25 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
     return 0;
   }
 
+#if defined(DARWIN) && defined(ARM64)
+  /* Instruction fetch from the RW lisp heap: restart at the RX dual-map
+     alias (HEAP_EXEC_BIAS).  ESR EC 0x20/0x21 = insn abort.  Matching
+     PC==FAR catches NX on the canonical VA without needing to parse
+     every call site. */
+  if (xp) {
+    natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
+    unsigned ec = (unsigned)((esr >> 26) & 0x3f);
+    natural pcval = (natural)xpPC(xp);
+    natural far = (natural)addr;
+    if ((ec == 0x20 || ec == 0x21) &&
+        pcval == far &&
+        pcval >= (natural)IMAGE_BASE_ADDRESS &&
+        pcval < ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
+      set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
+      return 0;
+    }
+  }
+#endif
 
   if (is_write_fault(xp,info)) {                  /* ppc:956-969 */
     area = find_protected_area(addr);
@@ -1342,22 +1361,40 @@ uuo_describe_symbol(LispObj sym)
 static void
 cold_load_dump_frame(ExceptionInformation *xp)
 {
+  pc where = xpPC(xp);
+  unsigned i;
+
   fprintf(dbgout,
           "  lr 0x%lx  nargs 0x%lx  vsp 0x%lx  tsp 0x%lx  sp 0x%lx\n"
-          "  imm0-2 0x%lx 0x%lx 0x%lx\n"
+          "  imm0-5 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx\n"
           "  arg_w..z(x8-11) 0x%lx 0x%lx 0x%lx 0x%lx  fn(x7) 0x%lx\n"
-          "  temp0-5(x12-17) 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx\n",
+          "  temp0-5(x12-17) 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx 0x%lx\n"
+          "  save0-3(x19-22) 0x%lx 0x%lx 0x%lx 0x%lx  rnil 0x%lx\n"
+          "  allocptr(x26) 0x%lx  allocbase(x27) 0x%lx  rcontext 0x%lx\n",
           (unsigned long)xpGPR(xp, 30), (unsigned long)xpGPR(xp, 6),
           (unsigned long)xpGPR(xp, 25), (unsigned long)xpGPR(xp, 24),
           (unsigned long)xpSP(xp),
           (unsigned long)xpGPR(xp, 0), (unsigned long)xpGPR(xp, 1),
-          (unsigned long)xpGPR(xp, 2),
+          (unsigned long)xpGPR(xp, 2), (unsigned long)xpGPR(xp, 3),
+          (unsigned long)xpGPR(xp, 4), (unsigned long)xpGPR(xp, 5),
           (unsigned long)xpGPR(xp, 8), (unsigned long)xpGPR(xp, 9),
           (unsigned long)xpGPR(xp, 10), (unsigned long)xpGPR(xp, 11),
           (unsigned long)xpGPR(xp, 7),
           (unsigned long)xpGPR(xp, 12), (unsigned long)xpGPR(xp, 13),
           (unsigned long)xpGPR(xp, 14), (unsigned long)xpGPR(xp, 15),
-          (unsigned long)xpGPR(xp, 16), (unsigned long)xpGPR(xp, 17));
+          (unsigned long)xpGPR(xp, 16), (unsigned long)xpGPR(xp, 17),
+          (unsigned long)xpGPR(xp, 19), (unsigned long)xpGPR(xp, 20),
+          (unsigned long)xpGPR(xp, 21), (unsigned long)xpGPR(xp, 22),
+          (unsigned long)xpGPR(xp, 23),
+          (unsigned long)xpGPR(xp, 26), (unsigned long)xpGPR(xp, 27),
+          (unsigned long)xpGPR(xp, 28));
+  if (where) {
+    fprintf(dbgout, "  code@pc:");
+    for (i = 0; i < 8; i++) {
+      fprintf(dbgout, " %08x", (unsigned)where[i]);
+    }
+    fprintf(dbgout, "\n");
+  }
   fflush(dbgout);
 }
 

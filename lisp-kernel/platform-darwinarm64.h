@@ -29,6 +29,17 @@ typedef ucontext_t ExceptionInformation;
 /* Preferred image base; ASLR may relocate. Same provisional value as linuxarm64. */
 #define IMAGE_BASE_ADDRESS 0x300000000000L
 
+/*
+ * Dual-map bias for W^X: lisp heap stays RW at its canonical VA;
+ * mach_vm_remap creates an RX alias at VA+HEAP_EXEC_BIAS.  Instruction
+ * fetches that NX-fault on the RW mapping are restarted at PC+bias
+ * (handle_protection_violation).  Bias must preserve low tag bits
+ * (fulltag-misc=12 code-vector entry points).
+ */
+#ifndef HEAP_EXEC_BIAS
+#define HEAP_EXEC_BIAS 0x004000000000ULL
+#endif
+
 #include "lisptypes.h"
 #include "arm64-constants.h"
 

@@ -32,6 +32,11 @@
 #endif
 #ifdef DARWIN
 #include <pthread.h>
+#if defined(ARM64)
+#include <mach/mach.h>
+#include <mach/mach_vm.h>
+#include <mach/mach_error.h>
+#endif
 #endif
 
 #ifndef WINDOWS
@@ -47,6 +52,54 @@
 #endif
 
 #define DEBUG_MEMORY 0
+
+#if defined(DARWIN) && defined(ARM64)
+/* RX alias of lisp image/heap pages (see HEAP_EXEC_BIAS). */
+static Boolean
+darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
+{
+  mach_vm_address_t rx;
+  vm_prot_t cur = 0, max = 0;
+  kern_return_t kr;
+
+  if (len == 0) {
+    return true;
+  }
+  if ((natural)start < (natural)IMAGE_BASE_ADDRESS) {
+    return true;
+  }
+  rx = (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
+  kr = mach_vm_remap(mach_task_self(),
+                     &rx,
+                     (mach_vm_size_t)len,
+                     0,
+                     VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
+                     mach_task_self(),
+                     (mach_vm_address_t)(natural)start,
+                     FALSE,
+                     &cur,
+                     &max,
+                     VM_INHERIT_NONE);
+  if (kr != KERN_SUCCESS) {
+    fprintf(dbgout,
+            "darwinarm64: mach_vm_remap RX alias failed (%d %s) at %p len 0x%lx\n",
+            kr, mach_error_string(kr), start, (unsigned long)len);
+    return false;
+  }
+  kr = mach_vm_protect(mach_task_self(),
+                       rx,
+                       (mach_vm_size_t)len,
+                       FALSE,
+                       VM_PROT_READ | VM_PROT_EXECUTE);
+  if (kr != KERN_SUCCESS) {
+    fprintf(dbgout,
+            "darwinarm64: mach_vm_protect RX failed (%d %s) at 0x%llx\n",
+            kr, mach_error_string(kr), (unsigned long long)rx);
+    return false;
+  }
+  return true;
+}
+#endif
 
 void
 allocation_failure(Boolean pointerp, natural size)
@@ -149,12 +202,19 @@ CommitMemory (LogicalAddress start, natural len)
 
   for (i = 0; i < 3; i++) {
 #if defined(DARWIN) && defined(ARM64)
-    /* W^X: RWX mmap is rejected; map RW and mprotect RX later if needed. */
+    /* W^X: RWX mmap is rejected; map RW and dual-map an RX alias
+       (HEAP_EXEC_BIAS) so heap code can run without making the
+       canonical lisp VA executable. */
     addr = mmap(start, len, MEMPROTECT_RW, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
 #else
     addr = mmap(start, len, MEMPROTECT_RWX, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
 #endif
     if (addr == start) {
+#if defined(DARWIN) && defined(ARM64)
+      if (!darwin_arm64_remap_exec_alias(start, len)) {
+        return false;
+      }
+#endif
       return true;
     } else {
       mmap(addr, len, MEMPROTECT_NONE, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
