@@ -32,11 +32,20 @@
 
 (in-package "CCL")
 
+#+(and darwin-target arm64-target)
+(defun %darwin-jit-write-protect (enabled)
+  "Toggle Apple Silicon MAP_JIT W^X. enabled=T => executable; NIL => writable."
+  (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
+           :int (if enabled 1 0)
+           :void))
+
 (defun make-callback-trampoline (index &optional info)
   (declare (ignorable info))
   (let* ((p (%allocate-callback-pointer 32))
          (addr (%lookup-subprim-address
                 #.(arm64::subprimitive-offset ".SPcallback"))))
+    #+(and darwin-target arm64-target)
+    (%darwin-jit-write-protect nil)
     (setf (%get-unsigned-long p 0)          ; movz x8,#lo16(index)
           (logior #xd2800008 (ash (ldb (byte 16 0) index) 5))
           (%get-unsigned-long p 4)          ; movk x8,#hi16(index),lsl #16
@@ -46,6 +55,8 @@
           (%get-unsigned-long p 16) #xd503201f   ; nop
           (%get-unsigned-long p 20) #xd503201f   ; nop
           (%%get-unsigned-longlong p 24) addr)
+    #+(and darwin-target arm64-target)
+    (%darwin-jit-write-protect t)
     ;; I/D-cache sync — REQUIRED on arm64 before the stub is executed
     ;; (same idiom as %make-code-executable, arm64-def.lisp).
     (ff-call (%kernel-import #.arm64::kernel-import-makedataexecutable)

@@ -1055,6 +1055,7 @@ is_write_fault(ExceptionInformation *xp, siginfo_t *info)
 static OSStatus pv_cold_load_fatal(ExceptionInformation *xp, BytePtr addr,
                                    Boolean is_write);
 static void cold_load_dump_frame(ExceptionInformation *xp);
+static void uuo_describe_symbol(LispObj sym);
 
 #if defined(DARWIN) && defined(ARM64)
 /* Walk back from a heap PC looking for a 32-bit ivector header whose
@@ -1204,16 +1205,41 @@ darwin_arm64_describe_fn(LispObj fn)
   {
     natural header = header_of(fn);
     unsigned st = (unsigned)header_subtag(header);
+    natural elems = header_element_count(header);
     LispObj cv = deref(fn, 1); /* function.code_vector @ slot 1 */
+    natural i;
 
     fprintf(dbgout,
-            "  fn 0x%lx subtag=0x%x code_vector=0x%lx\n",
-            (unsigned long)fn, st, (unsigned long)cv);
+            "  fn 0x%lx subtag=0x%x elems=%lu code_vector=0x%lx\n",
+            (unsigned long)fn, st, (unsigned long)elems, (unsigned long)cv);
     if (fulltag_of(cv) == fulltag_misc) {
       natural ch = header_of(cv);
       fprintf(dbgout, "    cv subtag=0x%x count=%lu\n",
               (unsigned)header_subtag(ch),
               (unsigned long)(ch >> num_subtag_bits));
+    }
+    /* Print immediate slots that look like symbols/strings (name). */
+    for (i = 2; i <= elems && i < 12; i++) {
+      LispObj imm = deref(fn, i);
+      if (fulltag_of(imm) == fulltag_symbol) {
+        fprintf(dbgout, "    imm[%lu]=", (unsigned long)i);
+        uuo_describe_symbol(imm);
+        fprintf(dbgout, "\n");
+      } else if (fulltag_of(imm) == fulltag_misc) {
+        natural ih = header_of(imm);
+        unsigned ist = (unsigned)header_subtag(ih);
+        if (ist == subtag_simple_base_string) {
+          natural j, n = header_element_count(ih);
+          unsigned *chars = (unsigned *)(untag(imm) + node_size);
+          if (n > 80) n = 80;
+          fprintf(dbgout, "    imm[%lu]=\"", (unsigned long)i);
+          for (j = 0; j < n; j++) {
+            unsigned c = chars[j];
+            fputc((c >= 0x20 && c < 0x7f) ? (int)c : '?', dbgout);
+          }
+          fprintf(dbgout, "\"\n");
+        }
+      }
     }
   }
   fflush(dbgout);
@@ -1617,12 +1643,31 @@ uuo_cold_load_fatal(ExceptionInformation *xp, pc where, opcode the_uuo,
 static OSStatus
 pv_cold_load_fatal(ExceptionInformation *xp, BytePtr addr, Boolean is_write)
 {
+  natural pcval = (natural)xpPC(xp);
+
   fprintf(dbgout,
           "\nFATAL (cold load, no lisp error system): unhandled %s fault\n"
           "  at pc 0x%lx, fault address 0x%lx\n",
           is_write ? "write" : "read",
-          (unsigned long)(natural)xpPC(xp), (unsigned long)(natural)addr);
+          (unsigned long)pcval, (unsigned long)(natural)addr);
   cold_load_dump_frame(xp);
+#if defined(DARWIN) && defined(ARM64)
+  if (pcval >= ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
+    pcval -= (natural)HEAP_EXEC_BIAS;
+  }
+  darwin_arm64_describe_pc_object(pcval);
+  darwin_arm64_describe_fn(xpGPR(xp, 7));
+  /* Dump a few words before the faulting store for context. */
+  if (pcval >= 16) {
+    unsigned *ip = (unsigned *)(pcval - 16);
+    int k;
+    fprintf(dbgout, "  code@pc-16:");
+    for (k = 0; k < 12; k++) {
+      fprintf(dbgout, " %08x", ip[k]);
+    }
+    fprintf(dbgout, "\n");
+  }
+#endif
   _exit(157);
   return -1;                      /* not reached */
 }
