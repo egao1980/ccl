@@ -38,7 +38,7 @@ kernel past image load into cold load.
   code-vector / MAP_JIT region on darwinarm64; do **not** MAP_JIT the
   mixed heap.
 
-### Current stop
+### Current status — cold load complete, REPL works
 
 Past `expand-ff-call` / rwlock. `%walk-dynamic-area` fault was
 **not** primarily the pre-trap clobber (still fixed): heap free zone
@@ -56,9 +56,24 @@ compaction landed in reused heap. Fix: unbias/rebias in
 `mark_pc_root` / `locative_forwarding_address` / purify/impurify
 locref paths (`arm64-gc.c`).
 
-**Now:** past `l1-clos-boot` through streams/files/typesys; dies in
-`l1-lisp-threads.da64fsl` with unhandled write to `0x3fdf`
-(`str w0,[x1]`, x1=0x3fdf) at RX pc.
+**Callbacks / MAP_JIT:** write fault at `0x3fdf` was failed RWX
+`mmap` (−1) + `%inc-ptr` in `%make-executable-page`. Fix: `MAP_JIT`
+(`#x0800`) + `pthread_jit_write_protect_np` when stamping trampolines
+(`l1-callbacks.lisp`, `arm64-callback-support.lisp`).
+
+**FFI load order:** `ffi-darwinarm64` `(require "FFI-LINUXARM64")`
+fell back to `.lisp` → `parse-file-options-line` → `STRING-TRIM`
+before `MISC`. Fix: cross-compile `ffi-linuxarm64.da64fsl` and
+`bin-load-provide` it before darwin FFI in `l1-boot-2`.
+
+**Milestone:** `./darm64cl --image-name arm64-boot.image` finishes
+cold load and reaches the listener (`DarwinARM6464`). Smoke:
+`(+ 1 2)` → 3, `(ash 1 40)` → 2^40, `:darwinarm64-target` in
+`*features*`.
+
+Still open: dump a full `darm64cl.image` via `save-application`,
+ANSI/Rove tests, real `AREA_CODE` + MAP_JIT (retire heap dual-map),
+Mach exception server, Apple AAPCS64 FFI divergences.
 
 Cross-runtime JIT survey (LuaJIT / V8 / JSC / CPython / PyPy) in
 `darwin.md` — reinforces separate `AREA_CODE` + MAP_JIT, not mixed heap.
