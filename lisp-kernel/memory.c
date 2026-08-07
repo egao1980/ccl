@@ -69,6 +69,10 @@ darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
     return true;
   }
   rx = (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
+  /* VM_INHERIT_SHARE: fork must keep the RX alias.  INHERIT_NONE left
+     children with RW heap only; return-from-fork at a biased PC (or NX
+     redirect into the missing alias) infinite-looped in the fault
+     handler — breaking run-program / ANSI tests. */
   kr = mach_vm_remap(mach_task_self(),
                      &rx,
                      (mach_vm_size_t)len,
@@ -79,7 +83,7 @@ darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
                      FALSE,
                      &cur,
                      &max,
-                     VM_INHERIT_NONE);
+                     VM_INHERIT_SHARE);
   if (kr != KERN_SUCCESS) {
     fprintf(dbgout,
             "darwinarm64: mach_vm_remap RX alias failed (%d %s) at %p len 0x%lx\n",

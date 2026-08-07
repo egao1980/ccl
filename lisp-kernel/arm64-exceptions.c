@@ -1291,21 +1291,23 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
     unsigned ec = (unsigned)((esr >> 26) & 0x3f);
     natural pcval = (natural)xpPC(xp);
     natural far = (natural)addr;
+    static __thread int nx_redirect_depth;
     if ((ec == 0x20 || ec == 0x21) &&
         pcval == far &&
         pcval >= (natural)IMAGE_BASE_ADDRESS &&
         pcval < ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
+      if (nx_redirect_depth > 2) {
+        fprintf(dbgout,
+                "\nFATAL: NX redirect recursion at 0x%lx (fork/RX inherit?)\n",
+                (unsigned long)pcval);
+        _exit(158);
+      }
       if (darwin_arm64_pc_in_code_vector(pcval)) {
+        nx_redirect_depth++;
         set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
+        nx_redirect_depth--;
         return 0;
       }
-      fprintf(dbgout,
-              "\nFATAL (cold load): NX fetch into non-code at 0x%lx\n",
-              (unsigned long)pcval);
-      cold_load_dump_frame(xp);
-      darwin_arm64_describe_pc_object(pcval);
-      darwin_arm64_describe_fn(xpGPR(xp, 7));
-      _exit(157);
       fprintf(dbgout,
               "\nFATAL (cold load): NX fetch into non-code at 0x%lx\n",
               (unsigned long)pcval);
