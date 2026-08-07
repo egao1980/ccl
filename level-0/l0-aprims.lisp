@@ -124,20 +124,22 @@
 (defun %make-recursive-lock-ptr ()
   (record-system-lock
    (let ((p (make-gcable-macptr $flags_DisposeRecursiveLock)))
-     ;; Use (setf (%get-ptr …) (ff-call … :address)) — not %setf-macptr
-     ;; of the ff-call.  arm642-%setf-macptr currently compiles the
-     ;; address-valued ff-call source as NIL (Darwin arm64 cold load).
-     (setf (%get-ptr p)
-           (ff-call (%kernel-import target::kernel-import-new-recursive-lock)
-                    :address))
+     ;; (%setf-macptr p (ff-call … :address)) — NOT (setf (%get-ptr p) …).
+     ;; The latter stores *through* p's foreign address (null here).
+     ;; Darwin bring-up: "mov x9,rnil" fatals were from bootstrapping
+     ;; without reloading acode-rewrite after nxenv (aapcs64-ff-call
+     ;; rewrite missing), not from %setf-macptr itself.
+     (%setf-macptr p
+                   (ff-call (%kernel-import target::kernel-import-new-recursive-lock)
+                            :address))
      p)))
 
 (defun %make-rwlock-ptr ()
   (record-system-lock
    (let ((p (make-gcable-macptr $flags_DisposeRwLock)))
-     (setf (%get-ptr p)
-           (ff-call (%kernel-import target::kernel-import-rwlock-new)
-                    :address))
+     (%setf-macptr p
+                   (ff-call (%kernel-import target::kernel-import-rwlock-new)
+                            :address))
      p)))
   
 (defun make-recursive-lock ()

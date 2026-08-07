@@ -10,6 +10,10 @@ kernel past image load into cold load.
 * Stock 1.13 lacks `aapcs64-ff-call` / `arm64-lap-function` nx1 hook —
   load arm64-branch `nxenv.lisp`, `backend.lisp`, `nx1.lisp` first
   (`tools/bootstrap-darwinarm64-boot.lisp`).
+* **Must reload `acode-rewrite.lisp` after nxenv** — loading nxenv
+  reassigns operator IDs; without reload, `aapcs64-ff-call` has no
+  rewrite entry and `%setf-macptr` of `(ff-call … :address)` becomes
+  `mov xN,rnil` (x23=`rnil`).
 * `tools/xdarwinarm64.lisp` must load `compile-ccl.lisp` (not fasl) and
   patch arch `nil-value` to Darwin static layout.
 
@@ -20,30 +24,22 @@ kernel past image load into cold load.
   (platform-darwinarm64.h + xarm64fasload darwin backend).
 * File `mmap`+`MAP_FIXED` fails for nonzero file offsets → `MapFile`
   uses anon commit + `read` (Windows-style).
-* Heap mapped RW (no RWX); dynamic/pure `mprotect` RX after load.
+* Heap mapped RW (no RWX); do **not** RX-protect dynamic (needs stores).
 * `mrs ctr_el0` SIGILL on Apple Silicon → `sys_icache_invalidate`.
 * Darwin `arm64-trap-support` xp accessors use measured ucontext offsets
   (not Linux `mcontext.regs`).
+* `%kernel-import` returns a **fixnum-locative** (raw addr, PPC-style);
+  `_SPffcall` treats non-macptr bits as the entry point (fixed subtag
+  compare to use `w2`, not stale `imm2`).
+* JIT path (later): Apple `MAP_JIT` + `pthread_jit_write_protect_np` /
+  `pthread_jit_write_with_callback_np` (same model as JSC/V8/Graal/
+  SpiderMonkey) — see Apple “Porting JITs to Apple silicon”. CCL notes
+  already want a separate code-vector / MAP_JIT region on darwinarm64.
 
 ### Current stop
 
-```
-FATAL (cold load, no lisp error system): wrong type … macptr
-  — non-symbol value 0x20000100b (nil)
-```
-
-in `%MAKE-RWLOCK-PTR`: after `make-gcable-macptr`,
-`(ff-call (%kernel-import rwlock-new) :address)` is compiling/running
-as if the import were **nil** (`mov x9, rnil` then trap-unless-macptr).
-`udf #4` alloc traps and Unix SIGILL delivery work.
-
-**Done this step:** removed dynamic-area RX (was `SPgvset` W^X → nested
-“read” fault); Darwin `is_write_fault` uses ESR.WnR; `%kernel-import`
-boxes the address like x86.
-
-**Next:** why `%kernel-import` / `aapcs64-ff-call` collapses to nil in
-`%make-rwlock-ptr` (import table / `ref-global` / nx1); then Mach,
-MAP_JIT/code-area, headers.
+Rebuilt after the `rnil`/`acode-rewrite` + `%setf-macptr` + ffcall
+fixes; iterating cold load toward REPL, then tests.
 
 ### Smoke
 

@@ -288,7 +288,7 @@ spentry ffcall_return_registers
         cmp imm2, #fulltag_misc
         b.ne 8f
         ldurb w2, [arg_z, #misc_subtag_offset]
-        cmp imm2, #subtag_macptr
+        cmp w2, #subtag_macptr          /* was imm2 — never compared the subtag */
         b.ne 8f
         ldur temp4, [arg_z, #macptr.address]
         b 9f

@@ -25,6 +25,18 @@
 (unless (assq 'aapcs64-ff-call *next-nx-operators*)
   (error "nxenv load did not install aapcs64-ff-call"))
 
+;; Loading nxenv reassigns operator IDs.  Host fasls (acode-rewrite, etc.)
+;; registered rewrite handlers under the OLD IDs, so aapcs64-ff-call had
+;; no rewrite entry — cross-compile then emitted `mov xN,rnil` for
+;; (ff-call (%kernel-import …) :address) inside %setf-macptr.  Reload.
+(load "ccl:compiler;acode-rewrite.lisp")
+(let* ((id (logand operator-id-mask (%nx1-operator aapcs64-ff-call)))
+       (fn (svref *acode-rewrite-functions* id)))
+  (unless fn
+    (error "aapcs64-ff-call rewrite not registered after acode-rewrite reload (id=~s)"
+           id))
+  (format t "~&;; aapcs64-ff-call rewrite id=~s => ~s~%" id fn))
+
 (load "ccl:tools;xdarwinarm64.lisp")
 
 (unless (find-backend :darwinarm64)
