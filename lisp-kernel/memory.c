@@ -263,13 +263,24 @@ ProtectMemory(LogicalAddress addr, natural nbytes)
   }
   return status;
 #else
-  int status = mprotect(addr, nbytes, PROT_READ | PROT_EXEC);
+  int prot;
+  int status;
+#if defined(DARWIN) && defined(ARM64)
+  /* Stack soft/hard guards: PROT_NONE.  RX is historically used on
+     other ports as "not writable"; on Darwin arm64 RX also requires
+     page-aligned ranges and is the wrong model for guards.  Callers
+     that need RX (pure space) should mprotect directly. */
+  prot = PROT_NONE;
+#else
+  prot = PROT_READ | PROT_EXEC;
+#endif
+  status = mprotect(addr, nbytes, prot);
   
   if (status) {
     status = errno;
     
     if (status == ENOMEM) {
-      void *mapaddr = mmap(addr,nbytes, PROT_READ | PROT_EXEC, MAP_ANON|MAP_PRIVATE|MAP_FIXED,-1,0);
+      void *mapaddr = mmap(addr,nbytes, prot, MAP_ANON|MAP_PRIVATE|MAP_FIXED,-1,0);
       if (mapaddr != MAP_FAILED) {
         return 0;
       }
@@ -290,7 +301,12 @@ UnProtectMemory(LogicalAddress addr, natural nbytes)
   DWORD oldProtect;
   return VirtualProtect(addr, nbytes, MEMPROTECT_RWX, &oldProtect);
 #else
+#if defined(DARWIN) && defined(ARM64)
+  /* W^X: cannot restore RWX; stack/data need RW. */
+  return mprotect(addr, nbytes, PROT_READ|PROT_WRITE);
+#else
   return mprotect(addr, nbytes, PROT_READ|PROT_WRITE|PROT_EXEC);
+#endif
 #endif
 }
 
@@ -349,7 +365,11 @@ MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int f
 #else
 #if defined(DARWIN) && defined(ARM64)
   /* arm64 Darwin: file MAP_FIXED fails for nonzero file offsets (EINVAL).
-     Also W^X rejects RWX.  Commit anon RW, then read like the Windows path. */
+     Also W^X rejects RWX.  Commit anon RW, then read like the Windows path.
+
+     Callers pass an OS-page-rounded nbytes (16KiB on Apple Silicon) but the
+     heap image only 4KiB-pads section payloads.  Read until EOF/short count
+     and leave the tail zero (fresh anon pages). */
   {
     size_t count, total = 0;
     off_t opos;
@@ -364,8 +384,11 @@ MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int f
     }
     while (total < nbytes) {
       count = read(fd, ((char *)addr) + total, nbytes - total);
-      if (!(count > 0)) {
+      if (count < 0) {
         return false;
+      }
+      if (count == 0) {
+        break;                  /* EOF: remainder already zero */
       }
       total += count;
     }

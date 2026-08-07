@@ -32,9 +32,20 @@ FATAL (cold load, no lisp error system): unhandled read fault
   fault address 0x30200000c210
 ```
 
-Image loads; cold load dies on a heap read. Still open: MAP_JIT for
-runtime code mutation, Mach exception server, real darwin-arm64-headers
-CDBs (provisional x86 copy), full rnil redesign.
+Under lldb: `EXC_BAD_INSTRUCTION` at pure PC (`udf #4` = intentional
+UUO). Without lldb: SIGILL handler path likely mis-reads Darwin
+ucontext → nested “unhandled read fault”. See
+`doc/porting/darwin.md` § Workarounds researched.
+
+**Next (priority):**
+
+1. Prove SIGILL delivery + correct `xpPC`/`xpGPRvector` (lldb
+   `ignored-exceptions EXC_BAD_INSTRUCTION`; dump `__ss.__pc` in handler;
+   recursion guard).
+2. Get `handle_uuo` for `udf #4` without nested fault.
+3. W^X for runtime: prefer separate code area (Clozure#11 / SBCL);
+   `mach_vm_remap` dual-map is a bring-up escape hatch.
+4. Mach exception server; real darwin-arm64-headers; rnil redesign.
 
 ### Smoke
 

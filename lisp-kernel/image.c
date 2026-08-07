@@ -131,7 +131,10 @@ off_t
 seek_to_next_page(int fd)
 {
   off_t pos = LSEEK(fd, 0, SEEK_CUR);
-  pos = align_to_power_of_2(pos, log2_page_size);
+  /* Heap image on-disk layout is always 4KiB-aligned (heap-image.lisp
+     image-align-output-position), independent of the OS page size.
+     Apple Silicon Darwin uses 16KiB pages — do not use log2_page_size here. */
+  pos = align_to_power_of_2(pos, 12);
   return LSEEK(fd, pos, SEEK_SET);
 }
   
@@ -426,9 +429,11 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
           ProtectMemory(a->low, a->active-a->low);
         }
 #if defined(DARWIN) && defined(ARM64)
-        /* Mapped RW due to W^X; pure code needs RX. */
+        /* Mapped RW due to W^X; pure code needs RX.
+           Span must be OS-page-aligned (16KiB on Apple Silicon). */
         if (a->active > a->low) {
-          mprotect(a->low, a->active - a->low, PROT_READ|PROT_EXEC);
+          natural span = align_to_power_of_2(a->active - a->low, log2_page_size);
+          mprotect(a->low, span, PROT_READ|PROT_EXEC);
         }
 #endif
         readonly_area = a;
@@ -464,9 +469,11 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
 	resize_dynamic_heap(a->active, lisp_heap_gc_threshold);
 #if defined(DARWIN) && defined(ARM64)
         /* Mapped RW due to W^X; make level-0 code executable.  Later
-           code allocation still needs MAP_JIT (doc/porting/darwin.md). */
+           code allocation still needs MAP_JIT (doc/porting/darwin.md).
+           Length must be OS-page-aligned (16KiB on Apple Silicon). */
         if (a->active > a->low) {
-          mprotect(a->low, a->active - a->low, PROT_READ|PROT_EXEC);
+          natural span = align_to_power_of_2(a->active - a->low, log2_page_size);
+          mprotect(a->low, span, PROT_READ|PROT_EXEC);
         }
 #endif
 	xMakeDataExecutable(a->low, a->active - a->low);

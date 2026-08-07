@@ -240,10 +240,15 @@ allocate_lisp_stack(natural useable,
 {
   void *allocate_stack(natural);
   void free_stack(void *);
+  /* Guard sizes in area.h are historically 4KiB-oriented (e.g.
+     VSTACK_HARDPROT=4096, CSTACK_SOFTPROT=100<<10).  Round up to the
+     OS page size so mprotect cannot EINVAL on 16KiB Darwin arm64. */
+  softsize = (unsigned)align_to_power_of_2(softsize, log2_page_size);
+  hardsize = (unsigned)align_to_power_of_2(hardsize, log2_page_size);
   natural size = useable+softsize+hardsize;
   natural overhead;
   BytePtr base, softlimit, hardlimit;
-  Ptr h = allocate_stack(size+4095);
+  Ptr h = allocate_stack(size+page_size-1);
   protected_area_ptr hprotp = NULL, sprotp;
 
   if (h == NULL) {
@@ -1942,6 +1947,18 @@ main
   real_executable_name = determine_executable_name(argv[0]);
   page_size = sysconf(_SC_PAGESIZE);
 #endif
+  /* Exceptions .c files default log2_page_size=12 (4KiB).  Apple Silicon
+     Darwin is 16KiB; mprotect/mmap require OS page alignment (EINVAL
+     otherwise).  Always derive log2 from the live page_size. */
+  {
+    int l2 = 0;
+    natural ps = (natural)page_size;
+    while (ps > 1) {
+      ps >>= 1;
+      l2++;
+    }
+    log2_page_size = l2;
+  }
 
 
   check_bogus_fp_exceptions();
