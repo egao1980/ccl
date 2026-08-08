@@ -1,6 +1,7 @@
 #!/bin/sh
 # Rebuild Darwin/arm64 with chosen dual-map mode, purify, smoke.
-# Default: DARWIN_ARM64_DUAL_MAP=0 (production).
+# Default: DUAL_MAP=0 (production).  Always make clean — .o files are
+# not rebuilt when only -DDARWIN_ARM64_DUAL_MAP= changes.
 set -e
 CCL_DIR=$(cd "$(dirname "$0")/.." && pwd)
 cd "$CCL_DIR"
@@ -8,12 +9,12 @@ LOG=/tmp/darwin-drop-dual-map.log
 WT="$CCL_DIR/tools/with-timeout"
 TIMEOUT="${CCL_SMOKE_TIMEOUT:-120}"
 DM="${DARWIN_ARM64_DUAL_MAP:-0}"
+NCPU=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
 : > "$LOG"
-echo ";; kernel DARWIN_ARM64_DUAL_MAP=$DM" | tee -a "$LOG"
+echo ";; kernel DUAL_MAP=$DM" | tee -a "$LOG"
 make -C lisp-kernel/darwinarm64 clean >>"$LOG" 2>&1
-make -C lisp-kernel/darwinarm64 -j"$(sysctl -n hw.ncpu 2>/dev/null || echo 4)" \
-  "CDEFINES=-DDARWIN -DARM64 -D_REENTRANT -D_DARWIN_C_SOURCE -DDARWIN_ARM64_DUAL_MAP=$DM -DVC_REVISION=\\\"dm$DM\\\"" \
-  >>"$LOG" 2>&1
+make -C lisp-kernel/darwinarm64 -j"$NCPU" "DUAL_MAP=$DM" \
+  "VC_REVISION=\"dm$DM\"" >>"$LOG" 2>&1
 echo ";; purify production image" | tee -a "$LOG"
 "$WT" "$TIMEOUT" ./darm64cl --no-init --batch \
   < tools/save-darwinarm64-image.lisp >>"$LOG" 2>&1

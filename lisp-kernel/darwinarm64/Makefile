@@ -11,10 +11,12 @@ VPATH = ../
 RM = /bin/rm
 CC = cc
 ASFLAGS =
-# Production: dual-map off (purify RX + MAP_JIT). Legacy biased images:
-#   make CDEFINES_EXTRA=-DDARWIN_ARM64_DUAL_MAP=1
+# Production default: dual-map off (purify RX + MAP_JIT).
+# Cold-load / legacy: make DUAL_MAP=1  (must make clean when flipping —
+# .o files are not rebuilt on CDEFINES change alone).
+DUAL_MAP ?= 0
 CDEFINES = -DDARWIN -DARM64 -D_REENTRANT -D_DARWIN_C_SOURCE \
-	-DDARWIN_ARM64_DUAL_MAP=0 \
+	-DDARWIN_ARM64_DUAL_MAP=$(DUAL_MAP) \
 	-DVC_REVISION=$(VC_REVISION) $(CDEFINES_EXTRA)
 CDEBUG = -g
 COPT = -O2
