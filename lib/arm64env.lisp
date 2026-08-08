@@ -79,4 +79,66 @@
 
 (defconstant $undo-arm64-c-frame 16)
 
+;;; Darwin/arm64 MAP_JIT helpers must be visible to the compiler modules
+;;; (arm64-lap loads after arm64env during rebuild-ccl).  Level-0
+;;; arm64-utils keeps the same definitions for the boot image / cold-load.
+#+(and darwinarm64-target)
+(progn
+  (defvar *jit-code-base* nil)
+  (defvar *jit-code-limit* nil)
+  (defvar *jit-code-free* nil)
+
+  (defun %jit-wp (on)
+    (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
+             :int (if on 1 0) :void))
+
+  (defun %ensure-jit-code-heap ()
+    (unless *jit-code-base*
+      (let* ((len #.(* 256 1024 1024))
+             (p (ff-call (foreign-symbol-address "mmap")
+                         :address (%null-ptr)
+                         :unsigned-fullword len
+                         :int #x7
+                         :int (logior #x1002 #x0800)
+                         :int -1 :long 0 :address)))
+        (when (or (%null-ptr-p p) (eql (%ptr-to-int p) -1))
+          (error "mmap(MAP_JIT) code heap failed"))
+        (setq *jit-code-base* p
+              *jit-code-limit* (%inc-ptr p len)
+              *jit-code-free* p)))
+    *jit-code-base*)
+
+  (defun %allocate-code-vector (element-count)
+    "Allocate a code-vector of ELEMENT-COUNT u32 words in MAP_JIT."
+    (declare (fixnum element-count))
+    (%ensure-jit-code-heap)
+    (let* ((payload (ash element-count 2))
+           (total (logandc2 (+ payload 8 15) 15))
+           (header (logior (ash element-count arm64::num-subtag-bits)
+                           arm64::subtag-code-vector))
+           (free *jit-code-free*)
+           (next (%inc-ptr free total)))
+      (when (>= (%ptr-to-int next) (%ptr-to-int *jit-code-limit*))
+        (error "MAP_JIT code heap exhausted"))
+      (ff-call (foreign-symbol-address "darwin_arm64_jit_init_code_vector")
+               :address free
+               :unsigned-doubleword header
+               :unsigned-fullword total
+               :void)
+      (setq *jit-code-free* next)
+      (%tag-as-misc free)))
+
+  (defun %darwinarm64-jit-install-code (code-vector src-ivector nbytes)
+    "Copy NBYTES from SRC-IVECTOR into CODE-VECTOR.  WP+icache in kernel C."
+    (declare (fixnum nbytes))
+    (with-macptrs ((d) (s))
+      (%vect-data-to-macptr code-vector d)
+      (%vect-data-to-macptr src-ivector s)
+      (ff-call (foreign-symbol-address "darwin_arm64_jit_install_code")
+               :address d
+               :address s
+               :unsigned-fullword nbytes
+               :void))
+    code-vector))
+
 (provide "ARM64ENV")
