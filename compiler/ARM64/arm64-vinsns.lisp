@@ -6174,6 +6174,12 @@
                                         ())
   (add dest sp (:$ 0)))
 
+;;; ARM64 C frames live on the Lisp SP (alloc-c-frame), unlike x86's
+;;; separate tcr.foreign-sp.  %foreign-stack-pointer is therefore SP.
+(define-arm64-vinsn %foreign-stack-pointer (((dest :imm))
+                                            ())
+  (add dest sp (:$ 0)))
+
 ;;; mem-ref-c-address / mem-ref-address -- demanded by the
 ;;; immediate-get-ptr handler; the load twins of w10's mem-set-c-address
 ;;; and the :address members of the w10 mem-ref-c-*/mem-ref-* family

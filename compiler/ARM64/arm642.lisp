@@ -9780,6 +9780,25 @@
              (! %current-frame-ptr target)))
          (^))))
 
+(defarm642 arm642-%foreign-stack-pointer %foreign-stack-pointer (seg vreg xfer)
+  (when vreg
+    (ensuring-node-target (target vreg)
+      (! %foreign-stack-pointer target)))
+  (^))
+
+(defarm642 arm642-with-c-frame with-c-frame (seg vreg xfer body &aux
+                                                 (old-stack (arm642-encode-stack)))
+  (! alloc-c-frame 0)
+  (arm642-open-undo $undo-arm64-c-frame)
+  (arm642-undo-body seg vreg xfer body old-stack))
+
+(defarm642 arm642-with-variable-c-frame with-variable-c-frame (seg vreg xfer size body &aux
+                                                                   (old-stack (arm642-encode-stack)))
+  (let* ((reg (arm642-one-untargeted-reg-form seg size arm64::arg_z)))
+    (! alloc-variable-c-frame reg)
+    (arm642-open-undo $undo-arm64-c-frame)
+    (arm642-undo-body seg vreg xfer body old-stack)))
+
 (defun arm642-swap-unsigned-cond-bit (cr-bit)
   (cond ((eql cr-bit arm64::cond-hi) arm64::cond-lo)
         ((eql cr-bit arm64::cond-lo) arm64::cond-hi)
