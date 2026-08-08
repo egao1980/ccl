@@ -2277,8 +2277,7 @@ xMakeDataExecutable(BytePtr start, natural nbytes)
      Darwin libkern helper instead of mrs + flush_cache_lines. */
   if (nbytes) {
     sys_icache_invalidate(start, nbytes);
-#if defined(ARM64) && DARWIN_ARM64_DUAL_MAP
-    /* Also invalidate the RX dual-map alias when present. */
+#if defined(ARM64)
     if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
       sys_icache_invalidate(start + HEAP_EXEC_BIAS, nbytes);
     }

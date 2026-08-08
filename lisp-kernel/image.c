@@ -445,6 +445,9 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
         if (a->active > a->low) {
           natural span = align_to_power_of_2(a->active - a->low, log2_page_size);
           mprotect(a->low, span, PROT_READ|PROT_EXEC);
+          /* Legacy compiled code may still add HEAP_EXEC_BIAS before
+             br/blr.  Alias only the pure span — not the whole heap. */
+          (void)darwin_arm64_remap_exec_alias(a->low, span);
         }
 #endif
         readonly_area = a;

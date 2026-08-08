@@ -106,11 +106,10 @@ Added:
   `udf #0` (re-enters Mach for `do_pseudo_sigreturn`)
 * `tools/xdarwinarm64.lisp` (alias of the darwinarm64 cross-setup)
 
-Dual-map dropped for production: `:purify t` + MAP_JIT fasl/runtime
-(`DARWIN_ARM64_DUAL_MAP=0`, no HEAP_EXEC_BIAS).  Still open: true ASLR
-rnil-relative statics (provisional FIXED `STATIC_BASE` remains); impure
-boot cold-load needs `DARWIN_ARM64_DUAL_MAP=1` if rebuilt from scratch.
-Cocoa arm64 ObjC CDB regenerated; libc includes **math.h**.
+Dual-map: eager remap on (`DARWIN_ARM64_DUAL_MAP=1`); NX redirect
+without remap-in-handler (fixed purified `#_` compile livelock).
+Production `:purify t` + MAP_JIT runtime.  Smoke timeouts via
+`tools/with-timeout`.  Still open: ASLR rnil-relative statics.
 `_SPffcall` stack-arg SP bump (GPR 9+), Darwin variadic-on-stack
 (`:variadic` sentinel), and Darwin natural-size packing for
 non-variadic stack overflow landed.  MAP_JIT code heap + conditional

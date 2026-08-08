@@ -53,9 +53,11 @@
 
 #define DEBUG_MEMORY 0
 
-#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
-/* RX alias of lisp image/heap pages (see HEAP_EXEC_BIAS). */
-static Boolean
+#if defined(DARWIN) && defined(ARM64)
+/* RX alias of lisp image/heap pages at VA+HEAP_EXEC_BIAS.  Used for
+   eager dual-map (DARWIN_ARM64_DUAL_MAP=1) and on-demand creation when
+   legacy biased call sites jump into the bias band. */
+Boolean
 darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
 {
   mach_vm_address_t rx;
@@ -242,9 +244,8 @@ UnCommitMemory (LogicalAddress start, natural len) {
   }
 #else
   if (len) {
-#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
-    /* Drop RX dual-map alias before replacing the RW mapping (stale
-       alias at VA+HEAP_EXEC_BIAS would otherwise remain executable). */
+#if defined(DARWIN) && defined(ARM64)
+    /* Drop RX alias if present (eager or on-demand). */
     if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
       mach_vm_address_t rx =
         (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
@@ -355,9 +356,7 @@ ProtectMemory(LogicalAddress addr, natural nbytes)
     if (status == ENOMEM) {
       void *mapaddr = mmap(addr,nbytes, prot, MAP_ANON|MAP_PRIVATE|MAP_FIXED,-1,0);
       if (mapaddr != MAP_FAILED) {
-#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
-        /* mmap MAP_FIXED replaced the RW source of any RX alias — drop
-           the stale alias.  Guards use PROT_NONE so no RX remap needed. */
+#if defined(DARWIN) && defined(ARM64)
         if ((natural)addr >= (natural)IMAGE_BASE_ADDRESS) {
           mach_vm_address_t rx =
             (mach_vm_address_t)((natural)addr + HEAP_EXEC_BIAS);

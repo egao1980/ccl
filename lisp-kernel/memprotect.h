@@ -80,6 +80,10 @@ int
 MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int fd);
 void allocation_failure(Boolean pointerp, natural size);
 
+#if defined(DARWIN) && defined(ARM64)
+Boolean darwin_arm64_remap_exec_alias(LogicalAddress start, natural len);
+#endif
+
 void protect_watched_areas(void);
 void unprotect_watched_areas(void);
 

@@ -33,22 +33,22 @@ typedef ucontext_t ExceptionInformation;
 /*
  * W^X policy (Darwin/arm64):
  *   * Purified / AREA_READONLY code → mprotect RX at the canonical VA
- *   * Runtime / fasl code → MAP_JIT + pthread_jit_write_protect_np
- * Dual-map (mach_vm_remap RX alias at VA+HEAP_EXEC_BIAS) is optional
- * bring-up scaffolding; production builds leave DARWIN_ARM64_DUAL_MAP
- * at 0.  Re-enable (=1) only if you must cold-load an impure boot image
- * whose code still lives on the RW IMAGE_BASE heap.
+ *   * Runtime compile → MAP_JIT + pthread_jit_write_protect_np
+ *   * HEAP_EXEC_BIAS address band = RX aliases of IMAGE_BASE pages for
+ *     legacy biased call sites / impure heap code.
+ *
+ * DARWIN_ARM64_DUAL_MAP:
+ *   1 (default) — eager mach_vm_remap on CommitMemory; NX handler only
+ *     redirects PC += bias (no remap-in-handler — that livelocked).
+ *   0 — no eager remap; fault handler creates aliases on demand with a
+ *     retry cap.  Pure/readonly spans still get an explicit alias at
+ *     image load / purify.  Re-enable: make CDEFINES_EXTRA=-DDARWIN_ARM64_DUAL_MAP=0
  */
 #ifndef DARWIN_ARM64_DUAL_MAP
-#define DARWIN_ARM64_DUAL_MAP 0
+#define DARWIN_ARM64_DUAL_MAP 1
 #endif
-#if DARWIN_ARM64_DUAL_MAP
 #ifndef HEAP_EXEC_BIAS
 #define HEAP_EXEC_BIAS 0x004000000000ULL
-#endif
-#else
-#undef HEAP_EXEC_BIAS
-#define HEAP_EXEC_BIAS 0ULL
 #endif
 
 #include "lisptypes.h"

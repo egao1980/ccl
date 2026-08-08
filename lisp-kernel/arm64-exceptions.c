@@ -1281,23 +1281,25 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
     return 0;
   }
 
-#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
-  /* Instruction fetch from the RW lisp heap: restart at the RX dual-map
-     alias (HEAP_EXEC_BIAS).  ESR EC 0x20/0x21 = insn abort.  Matching
-     PC==FAR catches NX on the canonical VA without needing to parse
-     every call site.
-
-     Dual-map makes ALL committed heap pages executable at +bias, so a
-     bad jump into a string/vector would otherwise "run" ASCII as udf
-     UUOs (e.g. 'n'=0x6e = binary vector_bounds).  Only redirect when
-     PC falls inside a code-vector / xcode-vector. */
+#if defined(DARWIN) && defined(ARM64)
+  /* Darwin W^X: IMAGE_BASE heap is RW; executable view is either
+     (a) DARWIN_ARM64_DUAL_MAP=1: eager RX alias at VA+HEAP_EXEC_BIAS,
+         NX on canonical → redirect PC += bias (no remap in the handler);
+     (b) =0: create the alias on demand, with a hard per-fault retry cap
+         so a bad PC cannot livelock in mach_vm_remap. */
   if (xp) {
     natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
     unsigned ec = (unsigned)((esr >> 26) & 0x3f);
     natural pcval = (natural)xpPC(xp);
     natural far = (natural)addr;
+    natural page = (natural)1 << log2_page_size;
+    natural page_mask = page - 1;
     static __thread int nx_redirect_depth;
-    if ((ec == 0x20 || ec == 0x21) &&
+    static __thread natural on_demand_last_pc;
+    static __thread int on_demand_hits;
+    Boolean insn_abort = (ec == 0x20 || ec == 0x21);
+
+    if (insn_abort &&
         pcval == far &&
         pcval >= (natural)IMAGE_BASE_ADDRESS &&
         pcval < ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
@@ -1308,6 +1310,29 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
         _exit(158);
       }
       if (darwin_arm64_pc_in_code_vector(pcval)) {
+#if !DARWIN_ARM64_DUAL_MAP
+        LogicalAddress base = (LogicalAddress)(pcval & ~page_mask);
+        if (pcval == on_demand_last_pc) {
+          if (++on_demand_hits > 8) {
+            fprintf(dbgout,
+                    "\nFATAL: on-demand RX alias livelock at 0x%lx\n",
+                    (unsigned long)pcval);
+            _exit(157);
+          }
+        } else {
+          on_demand_last_pc = pcval;
+          on_demand_hits = 1;
+        }
+        if (!darwin_arm64_remap_exec_alias(base, page)) {
+          fprintf(dbgout,
+                  "\nFATAL: on-demand RX alias failed for NX at 0x%lx\n",
+                  (unsigned long)pcval);
+          _exit(157);
+        }
+#else
+        on_demand_last_pc = 0;
+        on_demand_hits = 0;
+#endif
         nx_redirect_depth++;
         set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
         nx_redirect_depth--;
@@ -1321,6 +1346,35 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
       darwin_arm64_describe_fn(xpGPR(xp, 7));
       _exit(157);
     }
+
+#if !DARWIN_ARM64_DUAL_MAP
+    if (pcval >= ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS) &&
+        pcval < ((natural)IMAGE_BASE_ADDRESS + 2 * (natural)HEAP_EXEC_BIAS) &&
+        (far == pcval || !insn_abort)) {
+      natural canon = pcval - (natural)HEAP_EXEC_BIAS;
+      LogicalAddress base = (LogicalAddress)(canon & ~page_mask);
+      if (darwin_arm64_pc_in_code_vector(canon)) {
+        if (pcval == on_demand_last_pc) {
+          if (++on_demand_hits > 8) {
+            fprintf(dbgout,
+                    "\nFATAL: on-demand bias-band livelock at 0x%lx\n",
+                    (unsigned long)pcval);
+            _exit(157);
+          }
+        } else {
+          on_demand_last_pc = pcval;
+          on_demand_hits = 1;
+        }
+        if (!darwin_arm64_remap_exec_alias(base, page)) {
+          fprintf(dbgout,
+                  "\nFATAL: on-demand RX alias failed for bias PC 0x%lx\n",
+                  (unsigned long)pcval);
+          _exit(157);
+        }
+        return 0;
+      }
+    }
+#endif
   }
 #endif
 

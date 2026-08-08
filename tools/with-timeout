@@ -1,0 +1,61 @@
+#!/bin/sh
+# Run a command with a hard wall-clock timeout.
+# Usage: with-timeout SECONDS command [args...]
+# Exit: command's status, or 124 on timeout (GNU timeout convention).
+# Prints TIMEOUT: … to stderr so agents see why they stopped.
+
+if [ $# -lt 2 ]; then
+  echo "usage: $0 SECONDS command [args...]" >&2
+  exit 2
+fi
+SECS=$1
+shift
+
+if command -v gtimeout >/dev/null 2>&1; then
+  exec gtimeout --foreground -k 5 "$SECS" "$@"
+fi
+if command -v timeout >/dev/null 2>&1; then
+  if timeout --foreground -k 5 "$SECS" "$@" 2>/dev/null; then
+    exit 0
+  fi
+  ec=$?
+  # GNU timeout uses 124; some BSDs differ — normalize kills to 124 when
+  # the child outlived SECS is hard; just re-exec portable path below if 127.
+  if [ "$ec" -ne 127 ]; then
+    exit "$ec"
+  fi
+fi
+
+# Portable: perl alarm; always exit 124 on timeout.
+export WITH_TIMEOUT_SECS="$SECS"
+exec perl -e '
+  my $secs = $ENV{WITH_TIMEOUT_SECS};
+  my @cmd = @ARGV;
+  my $child;
+  $SIG{ALRM} = sub {
+    print STDERR "TIMEOUT: killed after ${secs}s: @cmd\n";
+    if (defined $child) {
+      kill "TERM", -$child;
+      select undef, undef, undef, 2;
+      kill "KILL", -$child;
+    }
+    exit 124;
+  };
+  alarm $secs;
+  $child = fork;
+  die "fork: $!\n" unless defined $child;
+  if ($child == 0) {
+    setpgrp(0, 0);
+    exec @cmd;
+    exit 127;
+  }
+  setpgrp(0, 0);
+  my $pid = waitpid($child, 0);
+  my $status = $?;
+  alarm 0;
+  exit 127 if $pid < 0;
+  if ($status & 127) {
+    exit 128 + ($status & 127);
+  }
+  exit $status >> 8;
+' "$@"

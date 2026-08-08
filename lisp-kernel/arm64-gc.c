@@ -2653,13 +2653,16 @@ purify(TCR *tcr, signed_natural param)               /* ppc-gc.c:2001-2048 */
 #if defined(DARWIN) && defined(ARM64)
     /* ProtectMemory is PROT_NONE on Darwin/arm64 (stack guards).  Pure
        code needs RX on the canonical VA — same as image.c AREA_READONLY.
-       With DARWIN_ARM64_DUAL_MAP=0, this is the only executable mapping
-       for purified image code (fasl/runtime uses MAP_JIT). */
+       Also RX-alias the pure span at +HEAP_EXEC_BIAS so legacy biased
+       call sites keep working without eager whole-heap dual-map. */
     {
       natural span = align_to_power_of_2(new_pure_area->active - new_pure_area->low,
                                          log2_page_size);
       if (span && mprotect(new_pure_area->low, span, PROT_READ | PROT_EXEC) != 0) {
         Bug(NULL, "purify: mprotect(RX) failed, errno = %d", errno);
+      }
+      if (span) {
+        (void)darwin_arm64_remap_exec_alias(new_pure_area->low, span);
       }
     }
 #else

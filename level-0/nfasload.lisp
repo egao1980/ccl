@@ -687,17 +687,14 @@
 (deffaslop $fasl-code-vector (s)
   (let* ((element-count (%fasl-read-count s))
          (size-in-bytes (* 4 element-count))
-         ;; Darwin/arm64: MAP_JIT code heap (no dual-map).  WP toggles only
-         ;; affect MAP_JIT pages — IMAGE_BASE pure/boot code keeps running.
-         ;; Other arm64 targets keep heap-allocated code-vectors.
-         (vector #+darwinarm64-target (%allocate-code-vector element-count)
-                 #-darwinarm64-target
-                 (allocate-typed-vector :code-vector element-count)))
+         ;; Heap-allocated code-vector.  On Darwin/arm64 production images
+         ;; are purified (RX at canonical VA); residual impure/boot heap
+         ;; code uses on-demand RX aliases at VA+HEAP_EXEC_BIAS.  Runtime
+         ;; compile uses MAP_JIT (%allocate-code-vector) separately.
+         (vector (allocate-typed-vector :code-vector element-count)))
     (declare (fixnum element-count size-in-bytes))
     (%epushval s vector)
-    #+darwinarm64-target (%jit-wp nil)
     (%fasl-read-n-bytes s vector 0 size-in-bytes)
-    #+darwinarm64-target (%jit-wp t)
     (%make-code-executable vector)
     vector))
 

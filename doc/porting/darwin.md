@@ -155,10 +155,12 @@ loop (mdbergmann on #11).
 | **Purify + native image** (xrme brainstorm) | Image code as Mach-O/ELF RX; `MAP_JIT` only for redefs | Save/merge story for dead code vectors |
 | **Entitlements** (`allow-jit` / `allow-unsigned-executable-memory`) | Needed for hardened/signing; unsigned ad-hoc kernels often already get `MAP_JIT` | Do **not** restore true RWX on Apple Silicon; `disable-executable-page-protection` ≡ unsigned-exec there |
 
-**Current (dual-map dropped):** production save is `:purify t` (pure RX at
-canonical VA); fasl + runtime compile use **MAP_JIT** + WP.  Dual-map is
-off (`DARWIN_ARM64_DUAL_MAP=0`; re-enable only for impure boot bring-up).
-Rebuild helper: `tools/run-darwin-drop-dual-map.sh`.
+**Current:** production save is `:purify t` (pure RX at canonical VA);
+runtime compile uses **MAP_JIT** + WP.  Eager dual-map is **on**
+(`DARWIN_ARM64_DUAL_MAP=1`): NX handler redirects to `VA+HEAP_EXEC_BIAS`
+without remapping (remap-in-handler livelocked purified `#_` compiles).
+On-demand aliases (`=0`) remain available with a retry cap.  Smokes use
+`tools/with-timeout` / `tools/run-darwin-smoke.sh` (exit 124 on timeout).
 
 **Boot path (already):** map heap RW → fill → `mprotect` RX (page-aligned).
 **Runtime compile:** needs one of the rows above before FASL redefine works.
