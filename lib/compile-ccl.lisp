@@ -710,9 +710,10 @@ the lisp and run REBUILD-CCL again.")
                ;; Darwin/arm64: cold-load of arm64-boot.image still has impure
                ;; heap code-vectors, so it needs DUAL_MAP=1.  After
                ;; save-application :purify t, rebuild production DUAL_MAP=0.
-               ;; Object files are not CDEFINES-aware — make clean between.
+               ;; Object files are not CDEFINES-aware — always make clean when
+               ;; flipping DUAL_MAP (and between the two builds below).
                #+darwinarm64-target
-               (%build-lisp-kernel :clean (or clean force)
+               (%build-lisp-kernel :clean t
                                    :extra-make-args '("DUAL_MAP=1")
                                    :verbose verbose)
                #-darwinarm64-target
