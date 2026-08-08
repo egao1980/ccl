@@ -625,11 +625,33 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
         (*save-source-locations* nil)
         (*warn-if-redefine-kernel* nil))
     (format t "~&;Installing Darwin/arm64 MAP_JIT fasl loader into host image~%")
-    ;; Helpers (no faslop install at load — that is gated for cold-load).
     (load "ccl:lib;arm64env.lisp")
+    ;; While compiling tip arm64-lap.lisp, the live LAP may still be the
+    ;; always-MAP_JIT variant.  MAP_JIT uvectors do not fasl-dump, so force
+    ;; heap allocate+blit for that compile-file only.
+    (let ((old-alloc (fdefinition '%allocate-code-vector))
+          (old-install (and (fboundp '%darwinarm64-jit-install-code)
+                            (fdefinition '%darwinarm64-jit-install-code))))
+      (flet ((heap-alloc (element-count)
+               (allocate-typed-vector :code-vector element-count))
+             (heap-install (code-vector src-ivector nbytes)
+               (declare (fixnum nbytes))
+               (with-macptrs ((d) (s))
+                 (%vect-data-to-macptr code-vector d)
+                 (%vect-data-to-macptr src-ivector s)
+                 (ff-call (foreign-symbol-address "memcpy")
+                          :address d :address s
+                          :unsigned-fullword nbytes :address))
+               (%make-code-executable code-vector)
+               code-vector))
+        (setf (fdefinition '%allocate-code-vector) #'heap-alloc)
+        (setf (fdefinition '%darwinarm64-jit-install-code) #'heap-install)
+        (unwind-protect
+             (load "ccl:compiler;ARM64;arm64-lap.lisp")
+          (setf (fdefinition '%allocate-code-vector) old-alloc)
+          (when old-install
+            (setf (fdefinition '%darwinarm64-jit-install-code) old-install)))))
     (%enable-darwinarm64-map-jit-fasls)
-    ;; Tip LAP: assemble into heap scratch, C-blit into MAP_JIT.
-    (load "ccl:compiler;ARM64;arm64-lap.lisp")
     (format t "~&;MAP_JIT host faslop/LAP installed~%")))
 
 (defun %build-lisp-kernel (&key clean (extra-make-args nil) verbose)
