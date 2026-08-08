@@ -654,6 +654,51 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
     (%enable-darwinarm64-map-jit-fasls)
     (format t "~&;MAP_JIT host faslop/LAP installed~%")))
 
+#+darwinarm64-target
+(defun %darwinarm64-shell-quote (string)
+  (with-output-to-string (out)
+    (write-char #\' out)
+    (loop for c across string
+          do (if (char= c #\')
+               (write-string "'\\''" out)
+               (write-char c out)))
+    (write-char #\' out)))
+
+#+darwinarm64-target
+(defun %darwinarm64-cross-xload-boot-image ()
+  "Build arm64-boot.image via Rosetta dx86cl64 cross-xload.
+Native xload-level-0 currently produces a boot image that cold-load
+faults in %FIND-PKG; the stock bootstrap script is the known-good path."
+  (let* ((dx86 (probe-file "ccl:ccl;dx86cl64"))
+         (script (probe-file "ccl:tools;bootstrap-darwinarm64-boot.lisp")))
+    (unless dx86
+      (error "darwinarm64 rebuild needs ./dx86cl64 for cross-xload"))
+    (unless script
+      (error "missing ~s" "ccl:tools;bootstrap-darwinarm64-boot.lisp"))
+    (format t "~&;Cross-xloading arm64-boot.image via Rosetta dx86cl64 ...")
+    (force-output)
+    (let* ((dir (native-translated-namestring (truename "ccl:")))
+           (dx86n (native-translated-namestring dx86))
+           (scriptn (native-translated-namestring script))
+           (cmd (format nil
+                        "export CCL_DEFAULT_DIRECTORY=~a; exec arch -x86_64 ~a --no-init --batch < ~a"
+                        (%darwinarm64-shell-quote dir)
+                        (%darwinarm64-shell-quote dx86n)
+                        (%darwinarm64-shell-quote scriptn))))
+      (with-output-to-string (s)
+        (let* ((proc (run-program "/bin/sh" (list "-c" cmd)
+                                  :output s :error :output)))
+          (multiple-value-bind (status exit-code)
+              (external-process-status proc)
+            (unless (and (eq :exited status) (eql exit-code 0))
+              (error "darwinarm64 cross-xload failed (~s ~s):~%~a"
+                     status exit-code (get-output-stream-string s)))
+            (unless (probe-file (standard-boot-image-name))
+              (error "cross-xload did not write ~s"
+                     (standard-boot-image-name)))
+            (format t "~&;Wrote bootstrapping image: ~s"
+                    (truename (standard-boot-image-name)))))))))
+
 (defun %build-lisp-kernel (&key clean (extra-make-args nil) verbose)
   "Run make in lisp-kernel/<platform>.  EXTRA-MAKE-ARGS is a list of
 additional make arguments (e.g. \"DUAL_MAP=1\")."
@@ -727,6 +772,9 @@ the lisp and run REBUILD-CCL again.")
              (%ensure-darwinarm64-map-jit-host-loader)
              (with-global-optimization-settings ()
                (compile-ccl (not (null force)))
+               #+darwinarm64-target
+               (%darwinarm64-cross-xload-boot-image)
+               #-darwinarm64-target
                (if force (xload-level-0 :force) (xload-level-0)))
              (when kernel
                ;; Darwin/arm64: cold-load of arm64-boot.image still has impure
