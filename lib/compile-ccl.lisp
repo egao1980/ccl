@@ -616,47 +616,41 @@ not runtime errors reported by a successfully created process."
 
 #+darwinarm64-target
 (defun %ensure-darwinarm64-map-jit-host-loader ()
-  "Install tip MAP_JIT $fasl-code-vector + LAP into the live host before
-compile-ccl.  Level-0 nfasload is not reloaded during rebuild; without this
-the first self-host keeps the heap faslop and pays NX-per-call on every
-loaded fasl (same approach as the surgical faslop bootstrap)."
+  "Install tip LAP into the live host before compile-ccl.
+Level-0 nfasload is not reloaded during rebuild.  Use heap faslop/LAP for
+the first self-host (MAP_JIT fasl reload of tip compiler modules currently
+UDF-faults).  save-application enables MAP_JIT for the saved image."
   (let ((*load-verbose* t)
         (*compile-verbose* nil)
         (*save-source-locations* nil)
         (*warn-if-redefine-kernel* nil))
-    (format t "~&;Installing Darwin/arm64 MAP_JIT fasl loader into host image~%")
+    (format t "~&;Installing Darwin/arm64 tip LAP into host image~%")
     (load "ccl:lib;arm64env.lisp")
-    ;; Purified images already have a MAP_JIT faslop.  Compiling/loading tip
-    ;; arm64-lap must use the heap: MAP_JIT uvectors do not fasl-dump, and a
-    ;; half-installed MAP_JIT lap SEGV's (UDF #0) mid rebuild.
-    (let ((old-faslop (svref *fasl-dispatch-table* 2))
-          (old-alloc (and (fboundp '%allocate-code-vector)
-                          (fdefinition '%allocate-code-vector)))
-          (old-install (and (fboundp '%darwinarm64-jit-install-code)
-                            (fdefinition '%darwinarm64-jit-install-code)))
-          (old-flag (and (boundp '*darwinarm64-map-jit-fasls*)
-                         *darwinarm64-map-jit-fasls*)))
-      (flet ((heap-alloc (element-count)
-               (allocate-typed-vector :code-vector element-count))
-             (heap-install (code-vector src-ivector nbytes)
-               (declare (fixnum nbytes))
-               (with-macptrs ((d) (s))
-                 (%vect-data-to-macptr code-vector d)
-                 (%vect-data-to-macptr src-ivector s)
-                 (ff-call (foreign-symbol-address "memcpy")
-                          :address d :address s
-                          :unsigned-fullword nbytes :address))
-               (%make-code-executable code-vector)
-               code-vector)
-             (heap-faslop (s)
-               (let* ((element-count (%fasl-read-count s))
-                      (size-in-bytes (* 4 element-count))
-                      (vector (allocate-typed-vector :code-vector element-count)))
-                 (declare (fixnum element-count size-in-bytes))
-                 (%epushval s vector)
-                 (%fasl-read-n-bytes s vector 0 size-in-bytes)
-                 (%make-code-executable vector)
-                 vector)))
+    (flet ((heap-alloc (element-count)
+             (allocate-typed-vector :code-vector element-count))
+           (heap-install (code-vector src-ivector nbytes)
+             (declare (fixnum nbytes))
+             (with-macptrs ((d) (s))
+               (%vect-data-to-macptr code-vector d)
+               (%vect-data-to-macptr src-ivector s)
+               (ff-call (foreign-symbol-address "memcpy")
+                        :address d :address s
+                        :unsigned-fullword nbytes :address))
+             (%make-code-executable code-vector)
+             code-vector)
+           (heap-faslop (s)
+             (let* ((element-count (%fasl-read-count s))
+                    (size-in-bytes (* 4 element-count))
+                    (vector (allocate-typed-vector :code-vector element-count)))
+               (declare (fixnum element-count size-in-bytes))
+               (%epushval s vector)
+               (%fasl-read-n-bytes s vector 0 size-in-bytes)
+               (%make-code-executable vector)
+               vector)))
+      (let ((old-alloc (and (fboundp '%allocate-code-vector)
+                            (fdefinition '%allocate-code-vector)))
+            (old-install (and (fboundp '%darwinarm64-jit-install-code)
+                              (fdefinition '%darwinarm64-jit-install-code))))
         (setq *darwinarm64-map-jit-fasls* nil)
         (setf (svref *fasl-dispatch-table* 2) #'heap-faslop)
         (when old-alloc
@@ -664,7 +658,6 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
         (setf (fdefinition '%darwinarm64-jit-install-code) #'heap-install)
         (unwind-protect
              (progn
-               ;; Drop any MAP_JIT-tainted tip lap fasl from a prior attempt.
                (dolist (f (list "ccl:bin;arm64-lap.da64fsl"
                                 "ccl:bin;arm64-lap.dx64fsl"))
                  (let ((p (probe-file f)))
@@ -673,11 +666,7 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
           (when old-alloc
             (setf (fdefinition '%allocate-code-vector) old-alloc))
           (when old-install
-            (setf (fdefinition '%darwinarm64-jit-install-code) old-install))))
-    ;; Leave the heap faslop installed for compile-ccl (do not restore the
-    ;; purified image's MAP_JIT faslop — reloading tip compiler fasls into
-    ;; MAP_JIT currently UDF-faults).  save-application re-enables MAP_JIT
-    ;; for the saved image.
+            (setf (fdefinition '%darwinarm64-jit-install-code) old-install)))))
     (setq *darwinarm64-map-jit-fasls* nil)
     (setf (svref *fasl-dispatch-table* 2)
           (nfunction $fasl-code-vector
