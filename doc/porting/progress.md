@@ -100,17 +100,22 @@ Added:
 
 * `lisp-kernel/darwinarm64/Makefile` → builds `darm64cl` (ASLR, no pagezero)
 * Expanded `platform-darwinarm64.h` (xp accessors, ABI shims)
-* `lisp-kernel/arm64-darwin-mach.c` — stub Darwin TCR/Mach hooks; Unix
-  signals for UUOs until Mach exception server is ported
-* `darwin_sigreturn` in `arm64-asmutils.s`
+* `lisp-kernel/arm64-darwin-mach.c` — full Mach exception server
+  (UUOs via EXC_BAD_INSTRUCTION → synthetic ucontext → signal_handler)
+* `darwin_sigreturn` in `arm64-asmutils.s`; Darwin `pseudo_sigreturn` is
+  `udf #0` (re-enters Mach for `do_pseudo_sigreturn`)
 * `tools/xdarwinarm64.lisp` (alias of the darwinarm64 cross-setup)
 
-Still open for Darwin: full dual-map removal after purified images,
-rnil-relative statics, Mach exception ports, Apple AAPCS64 FFI,
-interface `.cdb` databases.  MAP_JIT code heap + conditional
+Still open for Darwin: full dual-map removal after purified images;
+true ASLR rnil-relative statics (code already uses rnil for access —
+provisional FIXED `STATIC_BASE` remains); Apple AAPCS64 stack-arg /
+variadic packing (see `doc/porting/darwin.md`); regenerate
+`darwin-arm64-headers` `.cdb`s (bring-up = x86 copy, see
+`doc/porting/darwin-cdb.md`).  MAP_JIT code heap + conditional
 `HEAP_EXEC_BIAS` (IMAGE_BASE only) landed for runtime compile;
 fasl cold-load still uses the dual-mapped heap (WP-off would NX
-earlier MAP_JIT pages).
+earlier MAP_JIT pages).  Mach exception ports are on
+(`use_mach_exception_handling`).
 
 ## May 21 – June 23
 I looked a bit at Manfred Bergmann’s code at

@@ -48,6 +48,7 @@ typedef struct {
 extern void pseudo_sigreturn(void);
 extern Boolean create_system_thread(size_t, void *, void *(*)(void *), void *);
 extern void signal_handler(int, siginfo_t *, ExceptionInformation *, TCR *, int);
+extern Boolean use_mach_exception_handling;
 void fatal_mach_error(char *format, ...);
 
 #define MACH_CHECK_ERROR(context, x) \
@@ -508,9 +509,15 @@ void
 darwin_exception_init(TCR *tcr)
 {
   kern_return_t kret;
-  MACH_foreign_exception_state *fxs =
-    calloc(1, sizeof(MACH_foreign_exception_state));
+  MACH_foreign_exception_state *fxs;
 
+  if (!use_mach_exception_handling) {
+    /* Unix-signal bring-up: leave Mach ports unused (pre-port stub). */
+    tcr->native_thread_info = NULL;
+    return;
+  }
+
+  fxs = calloc(1, sizeof(MACH_foreign_exception_state));
   tcr->native_thread_info = (void *)fxs;
   if ((kret = setup_mach_exception_handling(tcr)) != KERN_SUCCESS) {
     fprintf(dbgout, "Couldn't setup exception handler - error = %d\n", kret);

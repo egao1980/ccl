@@ -163,32 +163,53 @@ Modern Apple docs push `pthread_jit_write_with_callback_np` + allowlist
 
 ### UUO / SIGILL / Mach exceptions
 
-CCL UUOs are `udf #n` → hardware `EXC_BAD_INSTRUCTION` → BSD `SIGILL`
-(XNU `ux_exception.c`).
+CCL UUOs are `udf #n` → hardware `EXC_BAD_INSTRUCTION` → Mach exception
+port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
 
-* **lldb:** stops on Mach exception and may never deliver `SIGILL`. Use
+* **Mach path (current Darwin arm64):** `use_mach_exception_handling = true`.
+  `arm64-darwin-mach.c` ports the darwinx8664 server: associate TCR with
+  the thread exception port, `mach_exc_server` MIG demux, synthetic
+  ucontext → `signal_handler`, return via faulting `pseudo_sigreturn`
+  (`udf #0`).  Message buffer is **8192** bytes — ARM64 `THREAD_STATE64`
+  messages exceed the historical x86 256-byte `mach_msg_server` limit.
+* **lldb:** stops on Mach exception; for Unix-fallback debugging use
   `settings set platform.plugin.darwin.ignored-exceptions EXC_BAD_INSTRUCTION`
-  (LLVM/lldb pattern) so the Unix handler runs.
-* **Unix path (current Darwin arm64):** `use_mach_exception_handling = false`;
-  accessors must be Darwin form `uc_mcontext->__ss.__pc` / `__x[]` /
-  `__es.__far` (V8/Wasmtime), not Linux `mcontext.regs`. Lisp-side
-  `arm64-trap-support` uses measured offsets; keep C macros in sync.
+  (LLVM/lldb pattern).
+* **Unix fallback:** accessors must be Darwin form `uc_mcontext->__ss.__pc`
+  / `__x[]` / `__es.__far`, not Linux `mcontext.regs`.
 * **Nested fault:** if the handler reads a bad PC/context, cold load
-  reports “unhandled read fault” instead of the UUO. Add a recursion
-  guard (mdbergmann hit infinite handler re-entry). Prove `xpPC` with a
-  tiny `udf` + dump in the handler before chasing Lisp bugs.
-* **Mach path (x86 Darwin / mdbergmann):** port
-  `associate_tcr_with_exception_port` / `mach_exc_server` from
-  `x86-exceptions.c`, then flip `use_mach_exception_handling`. Better
-  for allocation traps and W^X faults once dual-map/code-area lands.
+  reports “unhandled read fault” instead of the UUO.
 
-### Fixed addresses / ASLR
+### Fixed addresses / ASLR / rnil
 
 * `-pagezero_size` is unsupported on arm64 (malformed Mach-O / ASLR).
-* Provisional high FIXED RW bases work for bring-up; longer term:
-  rnil-relative statics (darwin.md intro).
+* **Current:** provisional high FIXED RW bases (`STATIC_BASE` /
+  `IMAGE_BASE` below).  Code already uses **rnil (x23)** for nil-relative
+  *access* to globals/NRS; that is **not** the same as ASLR-relocatable
+  statics.  True rnil-relative statics = allocate static/NRS at an
+  ASLR-chosen VA, stop baking absolute nil into images/xload/compiler,
+  relocate C `STATIC_BASE_ADDRESS` / image headers — a large milestone,
+  not a header tweak.
 * `MAP_JIT|MAP_FIXED` → EINVAL: cannot pin JIT at `IMAGE_BASE`. Floating
   `MAP_JIT` + reloc, dual-map, or purify-into-Mach-O.
+
+### Interface `.cdb` databases
+
+* Backend expects `ccl:darwin-arm64-headers;`.  The tree is **gitignored**
+  (`/*headers/`) like every other `*headers*` directory.
+* Bring-up copy is a **byte-identical clone of `darwin-x86-headers64`**,
+  not an arm64 regeneration.  Fixed-arity `#_`/`#$` mostly need names;
+  regenerate before shipping Cocoa/arch-sensitive layouts via
+  `ccl-ffigen` + Apple Silicon SDK (`-arch arm64`, current MacOSX.sdk).
+  See `doc/porting/darwin-cdb.md`.
+
+### Apple AAPCS64 FFI
+
+* FTD already has `:signed-char t` and `:natural-alignment t`.
+* Fixed-arity `ff-call` / `foreign-symbol-address` works under Mach.
+* Still open: `_SPffcall` SP bump for >8 GPR / Darwin variadic-on-stack
+  (must park restore state off the c_frame so header/savedsp are not
+  callee scratch); natural-size packing for non-variadic stack overflow.
 
 ### Smaller Darwin arm64 landmines (status)
 

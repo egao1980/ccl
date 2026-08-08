@@ -5,8 +5,9 @@
  *
  * Low-tag scheme matches linuxarm64 / compiler/ARM64.  Unlike
  * darwinx8664 we cannot reserve low memory with -pagezero_size (see
- * doc/porting/darwin.md); STATIC_BASE_ADDRESS in arm64-constants.h is
- * provisional and will need a register-relative (rnil) redesign.
+ * darwin.md).  STATIC_BASE_ADDRESS below is a provisional FIXED high VA
+ * for bring-up; code uses rnil for nil-relative *access*, but statics
+ * are not yet ASLR-relocatable (see doc/porting/darwin.md).
  */
 
 #define WORD_SIZE 64
