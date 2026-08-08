@@ -626,48 +626,23 @@ UDF-faults).  save-application enables MAP_JIT for the saved image."
         (*warn-if-redefine-kernel* nil))
     (format t "~&;Installing Darwin/arm64 tip LAP into host image~%")
     (load "ccl:lib;arm64env.lisp")
-    (flet ((heap-alloc (element-count)
-             (allocate-typed-vector :code-vector element-count))
-           (heap-install (code-vector src-ivector nbytes)
-             (declare (fixnum nbytes))
-             (with-macptrs ((d) (s))
-               (%vect-data-to-macptr code-vector d)
-               (%vect-data-to-macptr src-ivector s)
-               (ff-call (foreign-symbol-address "memcpy")
-                        :address d :address s
-                        :unsigned-fullword nbytes :address))
-             (%make-code-executable code-vector)
-             code-vector)
-           (heap-faslop (s)
-             (let* ((element-count (%fasl-read-count s))
-                    (size-in-bytes (* 4 element-count))
-                    (vector (allocate-typed-vector :code-vector element-count)))
-               (declare (fixnum element-count size-in-bytes))
-               (%epushval s vector)
-               (%fasl-read-n-bytes s vector 0 size-in-bytes)
-               (%make-code-executable vector)
-               vector)))
-      (let ((old-alloc (and (fboundp '%allocate-code-vector)
-                            (fdefinition '%allocate-code-vector)))
-            (old-install (and (fboundp '%darwinarm64-jit-install-code)
-                              (fdefinition '%darwinarm64-jit-install-code))))
-        (setq *darwinarm64-map-jit-fasls* nil)
-        (setf (svref *fasl-dispatch-table* 2) #'heap-faslop)
-        (when old-alloc
-          (setf (fdefinition '%allocate-code-vector) #'heap-alloc))
-        (setf (fdefinition '%darwinarm64-jit-install-code) #'heap-install)
-        (unwind-protect
-             (progn
-               (dolist (f (list "ccl:bin;arm64-lap.da64fsl"
-                                "ccl:bin;arm64-lap.dx64fsl"))
-                 (let ((p (probe-file f)))
-                   (when p (delete-file p))))
-               (load "ccl:compiler;ARM64;arm64-lap.lisp"))
-          (when old-alloc
-            (setf (fdefinition '%allocate-code-vector) old-alloc))
-          (when old-install
-            (setf (fdefinition '%darwinarm64-jit-install-code) old-install)))))
     (setq *darwinarm64-map-jit-fasls* nil)
+    (setf (fdefinition '%allocate-code-vector)
+          (nfunction %allocate-code-vector
+            (lambda (element-count)
+              (allocate-typed-vector :code-vector element-count))))
+    (setf (fdefinition '%darwinarm64-jit-install-code)
+          (nfunction %darwinarm64-jit-install-code
+            (lambda (code-vector src-ivector nbytes)
+              (declare (fixnum nbytes))
+              (with-macptrs ((d) (s))
+                (%vect-data-to-macptr code-vector d)
+                (%vect-data-to-macptr src-ivector s)
+                (ff-call (foreign-symbol-address "memcpy")
+                         :address d :address s
+                         :unsigned-fullword nbytes :address))
+              (%make-code-executable code-vector)
+              code-vector)))
     (setf (svref *fasl-dispatch-table* 2)
           (nfunction $fasl-code-vector
             (lambda (s)
@@ -679,6 +654,11 @@ UDF-faults).  save-application enables MAP_JIT for the saved image."
                 (%fasl-read-n-bytes s vector 0 size-in-bytes)
                 (%make-code-executable vector)
                 vector))))
+    (dolist (f (list "ccl:bin;arm64-lap.da64fsl"
+                     "ccl:bin;arm64-lap.dx64fsl"))
+      (let ((p (probe-file f)))
+        (when p (delete-file p))))
+    (load "ccl:compiler;ARM64;arm64-lap.lisp")
     (format t "~&;Host tip LAP installed (heap faslop for compile-ccl)~%")))
 
 #+darwinarm64-target
