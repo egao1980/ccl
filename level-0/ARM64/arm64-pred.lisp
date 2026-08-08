@@ -209,4 +209,4 @@
   (load-nfn-constant fname hairy-equal)              ; ppc:370 (ld fname 'hairy-equal nfn)
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))     ; ppc:371 (ba .SPjmpsym, no-link)
   (ldur imm0 (:@ nfn (:$ arm64::misc-function-offset)))
-  (br imm0))
+  (br-codevector imm0))

@@ -496,14 +496,14 @@
   (mov nfn temp0)                        ; ppc:486 (mr)
   (ldur imm0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:487 (ldr misc-data-offset)
   (set-nargs 1)                          ; ppc:488
-  (br imm0)                              ; ppc:489-490 (mtctr/bctr)
+  (br-codevector imm0)                   ; ppc:489-490 (mtctr/bctr)
   @bad
   (load-nfn-constant fname no-class-error) ; ppc:492
   ;; ppc:493 (ba .spjmpsym) — no-link tail jump per the EQUAL canon;
   ;; nargs still 1 from entry (as on PPC), arg_z still x.
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))
   (ldur imm0 (:@ nfn (:$ arm64::misc-function-offset)))
-  (br imm0)
+  (br-codevector imm0)
   @ret
   (mov arg_z temp0)                      ; ppc:495 — return frob from table
   (ret))                                 ; ppc:496 (blr)

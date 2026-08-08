@@ -71,9 +71,13 @@ cold load and reaches the listener (`DarwinARM6464`). Smoke:
 `(+ 1 2)` → 3, `(ash 1 40)` → 2^40, `:darwinarm64-target` in
 `*features*`.
 
-Still open: dump a full `darm64cl.image` via `save-application`,
-ANSI/Rove tests, real `AREA_CODE` + MAP_JIT (retire heap dual-map),
-Mach exception server, Apple AAPCS64 FFI divergences.
+**W^X call tax (Aug 2026):** dual-map NX→RX redirect in the fault
+handler made every lisp→lisp call cost one Mach signal (~1µs→ms).
+Fix: add `HEAP_EXEC_BIAS` before `br`/`blr` to code-vectors in
+`spentry-D` (`br_codevector`), `call/jump-known-{symbol,function}`
+vinsns, and LAP `br-codevector`. Funcall microbench: 3.2s/1e6 → 2.5ms.
+Rebuild boot/full image so library code (format/CLOS) picks up vinsns.
+
 
 Cross-runtime JIT survey (LuaJIT / V8 / JSC / CPython / PyPy) in
 `darwin.md` — reinforces separate `AREA_CODE` + MAP_JIT, not mixed heap.

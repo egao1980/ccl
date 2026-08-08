@@ -799,11 +799,23 @@
 ;;; vector as `object`).  Call scratch must NEVER be an allocatable
 ;;; arg/imm/temp-with-ABI-meaning -- v2 cont-71 class; temp0 is dead at
 ;;; every call boundary (callee prologue reads only nfn).
+;;; Darwin W^X: add HEAP_EXEC_BIAS (#x40<<32) before br/blr so the call
+;;; enters the RX dual-map alias instead of NX-faulting once per call.
+;;; Predicate also defined in arm64-backend.lisp; keep a copy here so
+;;; reloading this file alone is enough after a kernel bump.
+(defun darwinarm64-heap-exec-bias-p ()
+  (and *target-backend*
+       (eq (backend-name *target-backend*) :darwinarm64)))
+
 (define-arm64-vinsn (jump-known-symbol :jumplr) (()
                                                  ()
-                                                 ((cv (:lisp #.arm64::temp0))))
+                                                 ((cv (:lisp #.arm64::temp0))
+                                                  (bias (:u64 #.arm64::imm0))))
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias))
   (br cv))
 
 ;;; ============ call-known-symbol ============
@@ -814,9 +826,13 @@
 ;;; (upstream-port/compiler/arm642-additions.lisp:526).
 (define-arm64-vinsn (call-known-symbol :call) (((result (:lisp #.arm64::arg_z)))
                                                ()
-                                               ((cv (:lisp #.arm64::temp0))))
+                                               ((cv (:lisp #.arm64::temp0))
+                                                (bias (:u64 #.arm64::imm0))))
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias))
   (blr cv))
 
 ;;; ============ jump-known-function / call-known-function ============
@@ -828,10 +844,16 @@
 ;;; 32-bit ARM's one-instruction (ldr pc ...) trick has no arm64 analog --
 ;;; the tagged-code-vector branch is the arm64 equivalent
 ;;; (doc/porting/arm64.md "Functions").
+;;; Darwin W^X: add HEAP_EXEC_BIAS (#x40<<32) before br/blr so the call
+;;; enters the RX dual-map alias instead of NX-faulting once per call.
 (define-arm64-vinsn (jump-known-function :jumplr) (()
                                                    ()
-                                                   ((cv (:lisp #.arm64::temp0))))
+                                                   ((cv (:lisp #.arm64::temp0))
+                                                    (bias (:u64 #.arm64::imm0))))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias))
   (br cv))
 
 ;;; NO result spec: the PPC64 donor (@3715) declares none and every emit
@@ -841,8 +863,12 @@
 ;;; (@3701) has the wired result and its sites pass arg_z.
 (define-arm64-vinsn (call-known-function :call) (()
                                                  ()
-                                                 ((cv (:lisp #.arm64::temp0))))
+                                                 ((cv (:lisp #.arm64::temp0))
+                                                  (bias (:u64 #.arm64::imm0))))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias))
   (blr cv))
 
 ;;; ============ %unbox-u32 ============

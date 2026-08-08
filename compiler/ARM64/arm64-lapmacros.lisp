@@ -68,6 +68,33 @@
          (blr imm1))
       (error "unknown subprimitive name ~s" spname))))
 
+;;; Darwin W^X dual-map: enter code-vectors at VA+HEAP_EXEC_BIAS (RX alias).
+;;; Must match lisp-kernel/platform-darwinarm64.h HEAP_EXEC_BIAS (#x40<<32).
+;;; Without this, every lisp→lisp call NX-faults once (Mach signal storm).
+(defarm64lapmacro br-codevector (reg)
+  (let* ((darwin-p (and (boundp '*target-backend*)
+                        *target-backend*
+                        (eq (backend-name *target-backend*) :darwinarm64)))
+         (scratch (if (member reg '(imm0 arm64::imm0)) 'imm1 'imm0)))
+    (if darwin-p
+      `(progn
+         (movz ,scratch (:$ #x40 :lsl 32))
+         (add ,reg ,reg ,scratch)
+         (br ,reg))
+      `(br ,reg))))
+
+(defarm64lapmacro blr-codevector (reg)
+  (let* ((darwin-p (and (boundp '*target-backend*)
+                        *target-backend*
+                        (eq (backend-name *target-backend*) :darwinarm64)))
+         (scratch (if (member reg '(imm0 arm64::imm0)) 'imm1 'imm0)))
+    (if darwin-p
+      `(progn
+         (movz ,scratch (:$ #x40 :lsl 32))
+         (add ,reg ,reg ,scratch)
+         (blr ,reg))
+      `(blr ,reg))))
+
 (defarm64lapmacro set-nargs (n)
   (check-type n (unsigned-byte 13))
   `(movz nargs (:$ ',n)))

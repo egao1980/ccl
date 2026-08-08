@@ -548,7 +548,7 @@
   (ldp fn lr (:@ sp (:$ 16)))           ; ppc:1160 (mtlr loc-pc)
   (add sp sp (:$ 32))                   ;   discard frame; vsp NOT reloaded
   (ldur imm0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:1161 codevector
-  (br imm0))                            ; ppc:1162-1163 (mtctr/bctr) — W4-D15
+  (br-codevector imm0))                            ; ppc:1162-1163 (mtctr/bctr) — W4-D15
 
 (defarm64lapfunction %apply-with-method-context ((magic arg_x)
                                                  (function arg_y)
@@ -562,7 +562,7 @@
   (ldp fn lr (:@ sp (:$ 16)))           ; ppc:1180
   (add sp sp (:$ 32))
   (ldur imm0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:1181
-  (br imm0))                            ; ppc:1182-1183 — W4-D15
+  (br-codevector imm0))                            ; ppc:1182-1183 — W4-D15
 
 ;;; %apply-lexpr-tail-wise — ppc:1188
 ;;; Preconditions ppc:1189-1199 apply verbatim (lexpr via .SPlexpr-entry;
@@ -602,7 +602,7 @@
   (b.eq @jump)                          ; ppc:1222 (beqctr cr1)
   (vpop arg_x)                          ; ppc:1223
   @jump
-  (br temp0))                           ; ppc:1224 (bctr) — W4-D15
+  (br-codevector temp0))                ; ppc:1224 (bctr) — W4-D15
 
 
 ;;; ---------------------------------------------------------------------

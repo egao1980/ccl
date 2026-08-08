@@ -103,3 +103,17 @@ _SP\name:
         .macro extract_header dest, miscobj
         ldur \dest, [\miscobj, #misc_header_offset]
         .endm
+
+/* Darwin W^X dual-map: lisp heap is RW at the canonical VA; an RX alias
+ * lives at VA+HEAP_EXEC_BIAS (platform-darwinarm64.h).  Branching to a
+ * tagged code-vector pointer without the bias takes an NX fault per call
+ * (~1 Mach signal / funcall) — fatal for CLOS/format/hash-table workloads.
+ * Bias before br; low tag bits are preserved (bias = 1<<38).  Scratch:
+ * imm0 (must not be \reg). */
+        .macro br_codevector reg
+#if defined(__APPLE__)
+        movz imm0, #0x40, lsl #32
+        add \reg, \reg, imm0
+#endif
+        br \reg
+        .endm
