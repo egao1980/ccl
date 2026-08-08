@@ -687,14 +687,21 @@
 (deffaslop $fasl-code-vector (s)
   (let* ((element-count (%fasl-read-count s))
          (size-in-bytes (* 4 element-count))
-         ;; Heap-allocated code-vector.  On Darwin/arm64 production images
-         ;; are purified (RX at canonical VA); residual impure/boot heap
-         ;; code uses on-demand RX aliases at VA+HEAP_EXEC_BIAS.  Runtime
-         ;; compile uses MAP_JIT (%allocate-code-vector) separately.
-         (vector (allocate-typed-vector :code-vector element-count)))
+         ;; Darwin/arm64: dynamic heap is RW-only (W^X).  Fasl-loaded code
+         ;; must live in MAP_JIT like LAP (%allocate-code-vector); otherwise
+         ;; every entry NX-faults into on-demand RX-alias redirect and the
+         ;; livelock cap trips during (require …).  Other targets keep
+         ;; heap-allocated code-vectors (RWX or equivalent).
+         (vector
+          #+(and darwinarm64-target)
+          (%allocate-code-vector element-count)
+          #-(and darwinarm64-target)
+          (allocate-typed-vector :code-vector element-count)))
     (declare (fixnum element-count size-in-bytes))
     (%epushval s vector)
+    #+(and darwinarm64-target) (%jit-wp nil)
     (%fasl-read-n-bytes s vector 0 size-in-bytes)
+    #+(and darwinarm64-target) (%jit-wp t)
     (%make-code-executable vector)
     vector))
 

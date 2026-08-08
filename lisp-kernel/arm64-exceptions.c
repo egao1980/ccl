@@ -1285,8 +1285,9 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
   /* Darwin W^X: IMAGE_BASE heap is RW; executable view is either
      (a) DARWIN_ARM64_DUAL_MAP=1: eager RX alias at VA+HEAP_EXEC_BIAS,
          NX on canonical → redirect PC += bias (no remap in the handler);
-     (b) =0: create the alias on demand, with a hard per-fault retry cap
-         so a bad PC cannot livelock in mach_vm_remap. */
+     (b) =0: create the alias on demand.  Fasl/LAP code should live in
+         MAP_JIT or pure RX so this path is rare; nx_redirect_depth caps
+         true recursion. */
   if (xp) {
     natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
     unsigned ec = (unsigned)((esr >> 26) & 0x3f);
@@ -1295,8 +1296,6 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
     natural page = (natural)1 << log2_page_size;
     natural page_mask = page - 1;
     static __thread int nx_redirect_depth;
-    static __thread natural on_demand_last_pc;
-    static __thread int on_demand_hits;
     Boolean insn_abort = (ec == 0x20 || ec == 0x21);
 
     if (insn_abort &&
@@ -1311,27 +1310,16 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
       }
       if (darwin_arm64_pc_in_code_vector(pcval)) {
 #if !DARWIN_ARM64_DUAL_MAP
+        /* Remap is idempotent.  Under DM=0, impure heap code still NX-faults
+           on every canonical entry (RX lives at +HEAP_EXEC_BIAS only); that
+           is expected for residual impure code — not a livelock. */
         LogicalAddress base = (LogicalAddress)(pcval & ~page_mask);
-        if (pcval == on_demand_last_pc) {
-          if (++on_demand_hits > 8) {
-            fprintf(dbgout,
-                    "\nFATAL: on-demand RX alias livelock at 0x%lx\n",
-                    (unsigned long)pcval);
-            _exit(157);
-          }
-        } else {
-          on_demand_last_pc = pcval;
-          on_demand_hits = 1;
-        }
         if (!darwin_arm64_remap_exec_alias(base, page)) {
           fprintf(dbgout,
                   "\nFATAL: on-demand RX alias failed for NX at 0x%lx\n",
                   (unsigned long)pcval);
           _exit(157);
         }
-#else
-        on_demand_last_pc = 0;
-        on_demand_hits = 0;
 #endif
         nx_redirect_depth++;
         set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
@@ -1354,17 +1342,7 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
       natural canon = pcval - (natural)HEAP_EXEC_BIAS;
       LogicalAddress base = (LogicalAddress)(canon & ~page_mask);
       if (darwin_arm64_pc_in_code_vector(canon)) {
-        if (pcval == on_demand_last_pc) {
-          if (++on_demand_hits > 8) {
-            fprintf(dbgout,
-                    "\nFATAL: on-demand bias-band livelock at 0x%lx\n",
-                    (unsigned long)pcval);
-            _exit(157);
-          }
-        } else {
-          on_demand_last_pc = pcval;
-          on_demand_hits = 1;
-        }
+        /* Same as canonical path: idempotent remap, no false livelock. */
         if (!darwin_arm64_remap_exec_alias(base, page)) {
           fprintf(dbgout,
                   "\nFATAL: on-demand RX alias failed for bias PC 0x%lx\n",
