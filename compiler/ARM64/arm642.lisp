@@ -9228,13 +9228,9 @@
         (if (eq size :double-float)
           (! reload-double-c-arg ($ fpreg :class :fpr :mode :double-float) from)
           (! reload-single-c-arg ($ fpreg :class :fpr :mode :single-float) from))))
-    ;; No stack args reach the callee: _SPffcall keeps SP at the frame
-    ;; head during the call (16m5c -- popping freed the saved lr/backlink
-    ;; under the callee).  Args 9+ would sit in never-read stack slots,
-    ;; so refuse loudly until the stack-arg frame layout is ratified.
-    (when (> ngpr-args 8)
-      (compiler-bug "aapcs64-ff-call: more than 8 GPR args (~d) -- stack-arg ~
-                     frame layout not ratified (16m5c)" ngpr-args))
+    ;; Stack args: _SPffcall bumps SP to c_frame.params+8*node_size when
+    ;; the frame has words above the 8 GP saves, so overflow args sit at
+    ;; the callee's incoming SP.  Restore state is vstack-parked.
     (arm642-vpop-register seg ($ arm64::arg_z))
     (! ff-call)
     ;; .SPffcall popped the c-frame at runtime; restore the static

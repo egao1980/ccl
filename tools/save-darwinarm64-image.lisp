@@ -5,8 +5,13 @@
 ;;;;
 ;;;; Purify RX on pure is fixed, but save still uses :purify nil until
 ;;;; dual-map is dropped for a fully purified + MAP_JIT-only runtime.
+;;;;
+;;;; Clear *outstanding-deferred-warnings* before dump: saving from inside
+;;;; with-compilation-unit (compile-ccl) otherwise leaves a parent unit in
+;;;; the image and compile-file deferred warnings never signal.
 
 (in-package "CCL")
 
+(setq *outstanding-deferred-warnings* nil)
 (format t "~&;; save-application darm64cl.image :purify nil~%")
 (save-application "darm64cl.image" :purify nil)

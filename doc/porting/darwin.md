@@ -207,9 +207,17 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
 
 * FTD already has `:signed-char t` and `:natural-alignment t`.
 * Fixed-arity `ff-call` / `foreign-symbol-address` works under Mach.
-* Still open: `_SPffcall` SP bump for >8 GPR / Darwin variadic-on-stack
-  (must park restore state off the c_frame so header/savedsp are not
-  callee scratch); natural-size packing for non-variadic stack overflow.
+* **`_SPffcall` stack args (GPR 9+):** done. Before the `blr`, if the
+  c_frame has words above the 8 GP saves, SP advances to
+  `c_frame.params+8*node_size` so overflow args sit at the callee's
+  incoming SP. Restore state (lr, savedsp, enclosing
+  `last_lisp_frame`) is parked on the **vstack** — never re-read from
+  the c_frame after return (callee frames clobber below SP). When
+  bumping, `last_lisp_frame` is the boundary lisp_frame (above the new
+  SP), not the c_frame base.
+* Still open: Darwin **variadic-on-stack** (Apple ABI: `...` args all
+  on the stack; needs prototype-aware `expand-ff-call` / CDB); natural-
+  size packing for non-variadic stack overflow of odd-sized types.
 
 ### Smaller Darwin arm64 landmines (status)
 

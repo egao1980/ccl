@@ -13,8 +13,12 @@
 ;;; %MAKE-RWLOCK-PTR then did `mov xN,rnil` + trap-unless-macptr.
 
 ;;; Reuse Linux AAPCS64 callback generators until Darwin-specific
-;;; packing (variadic-on-stack, natural-size slots) is wired.  Ensures
-;;; ARM64-LINUX package + definitions exist when only Darwin is loaded.
+;;; packing is wired.  Fixed-arity stack overflow (GPR 9+) is handled
+;;; by _SPffcall + arm642-aapcs64-ff-call.  Still TODO here: Apple
+;;; variadic-on-stack (all `...` args on the stack; needs prototype /
+;;; CDB) and natural-size stack packing for odd-sized non-variadic
+;;; overflow.  Ensures ARM64-LINUX package + definitions exist when
+;;; only Darwin is loaded.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (unless (find-package "ARM64-LINUX")
     (make-package "ARM64-LINUX" :use '("CL" "CCL")))

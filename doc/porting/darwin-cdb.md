@@ -11,9 +11,13 @@ is enough for fixed-arity kernel-import / cold-load `#_` names.  It is
 **not** an arm64-translated database — regenerate before relying on
 arch-sensitive struct layouts or Cocoa.
 
+Full regeneration needs [Clozure/ccl-ffigen](https://github.com/Clozure/ccl-ffigen)
+(not vendored in this tree).  Until that lands, keep the x86-64 copy and
+treat Cocoa / `#_` record layouts as unverified on arm64.
+
 ## Regenerate (outline)
 
-1. Build `ccl-ffigen/ffigen5` with `Makefile.darwin` (Xcode libclang).
+1. Clone/build `ccl-ffigen` (`ffigen5` + `Makefile.darwin`, Xcode libclang).
 2. Add `darwin-arm64-headers/<module>/C/{translate,populate}.sh` modeled
    on `darwin-x86-headers64` but with `-arch arm64` and the current
    `MacOSX.sdk` (not MacOSX10.11 + `-m64`).
@@ -24,3 +28,9 @@ arch-sensitive struct layouts or Cocoa.
    → writes `.cdb` under `ccl:darwin-arm64-headers;`.
 
 `ccl-ffigen/arm64-headers/` today is **Linux** aarch64, not Darwin.
+
+## Smoke after regen
+
+* `(#_getpid)`, `(#_strlen …)` already work on the x86 copy (name-only).
+* Prefer a record-layout probe (`(#_stat …)` / `(:struct :stat)` size vs
+  `sizeof` from a tiny C helper) before trusting Cocoa CDBs.
