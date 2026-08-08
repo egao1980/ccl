@@ -687,18 +687,30 @@
 (deffaslop $fasl-code-vector (s)
   (let* ((element-count (%fasl-read-count s))
          (size-in-bytes (* 4 element-count))
-         ;; Heap-allocated code-vector.  Darwin/arm64 dynamic heap is RW-only
-         ;; (W^X); execution uses on-demand RX aliases at +HEAP_EXEC_BIAS
-         ;; (see arm64-exceptions.c) until purify moves code to RX pure space.
-         ;; Do NOT use MAP_JIT here: pthread_jit_write_protect_np is
-         ;; process-global, so (%jit-wp nil) around the fasl byte copy makes
-         ;; every already-loaded JIT code-vector non-executable (cold-load
-         ;; write faults).  LAP/runtime compile uses %allocate-code-vector.
-         (vector (allocate-typed-vector :code-vector element-count)))
+         ;; Darwin/arm64: load into MAP_JIT (same arena as LAP/`compile`).
+         ;; Fasl bytes are unchanged; only the load-time home of the
+         ;; code-vector changes.  Running at the canonical VA avoids the
+         ;; unbiased NX-per-call tax that made compile-ccl unusable when
+         ;; fasls landed on the RW heap.
+         ;;
+         ;; Fill path: read into a heap u8 scratch (lisp may call already-
+         ;; loaded JIT code), then blit under WP in kernel C.  Do NOT
+         ;; (%jit-wp nil) around %fasl-read-n-bytes — that is the cold-load
+         ;; write-fault footgun.
+         (vector #+darwinarm64-target
+                 (%allocate-code-vector element-count)
+                 #-darwinarm64-target
+                 (allocate-typed-vector :code-vector element-count)))
     (declare (fixnum element-count size-in-bytes))
     (%epushval s vector)
-    (%fasl-read-n-bytes s vector 0 size-in-bytes)
-    (%make-code-executable vector)
+    #+darwinarm64-target
+    (let ((scratch (make-array size-in-bytes :element-type '(unsigned-byte 8))))
+      (%fasl-read-n-bytes s scratch 0 size-in-bytes)
+      (%darwinarm64-jit-install-code vector scratch size-in-bytes))
+    #-darwinarm64-target
+    (progn
+      (%fasl-read-n-bytes s vector 0 size-in-bytes)
+      (%make-code-executable vector))
     vector))
 
 (defun fasl-read-gvector (s subtype)

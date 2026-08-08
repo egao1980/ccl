@@ -1285,9 +1285,9 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
   /* Darwin W^X: IMAGE_BASE heap is RW; executable view is either
      (a) DARWIN_ARM64_DUAL_MAP=1: eager RX alias at VA+HEAP_EXEC_BIAS,
          NX on canonical → redirect PC += bias (no remap in the handler);
-     (b) =0: create the alias on demand.  Fasl/LAP code should live in
-         MAP_JIT or pure RX so this path is rare; nx_redirect_depth caps
-         true recursion. */
+     (b) =0: same redirect on canonical NX; create the alias only if the
+         biased PC then faults (below).  Remapping on every canonical NX
+         made compile-ccl spend >90% of CPU in mach_vm_remap. */
   if (xp) {
     natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
     unsigned ec = (unsigned)((esr >> 26) & 0x3f);
@@ -1309,18 +1309,6 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
         _exit(158);
       }
       if (darwin_arm64_pc_in_code_vector(pcval)) {
-#if !DARWIN_ARM64_DUAL_MAP
-        /* Remap is idempotent.  Under DM=0, impure heap code still NX-faults
-           on every canonical entry (RX lives at +HEAP_EXEC_BIAS only); that
-           is expected for residual impure code — not a livelock. */
-        LogicalAddress base = (LogicalAddress)(pcval & ~page_mask);
-        if (!darwin_arm64_remap_exec_alias(base, page)) {
-          fprintf(dbgout,
-                  "\nFATAL: on-demand RX alias failed for NX at 0x%lx\n",
-                  (unsigned long)pcval);
-          _exit(157);
-        }
-#endif
         nx_redirect_depth++;
         set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
         nx_redirect_depth--;
@@ -1336,13 +1324,15 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
     }
 
 #if !DARWIN_ARM64_DUAL_MAP
+    /* Bias-band fault: alias missing or not yet RX.  Remap once, then
+       retry the biased PC.  Steady-state impure calls only take the
+       canonical NX→redirect path above. */
     if (pcval >= ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS) &&
         pcval < ((natural)IMAGE_BASE_ADDRESS + 2 * (natural)HEAP_EXEC_BIAS) &&
         (far == pcval || !insn_abort)) {
       natural canon = pcval - (natural)HEAP_EXEC_BIAS;
       LogicalAddress base = (LogicalAddress)(canon & ~page_mask);
       if (darwin_arm64_pc_in_code_vector(canon)) {
-        /* Same as canonical path: idempotent remap, no false livelock. */
         if (!darwin_arm64_remap_exec_alias(base, page)) {
           fprintf(dbgout,
                   "\nFATAL: on-demand RX alias failed for bias PC 0x%lx\n",

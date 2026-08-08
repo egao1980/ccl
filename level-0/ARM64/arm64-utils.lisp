@@ -879,7 +879,7 @@ be somewhat larger than what was specified)."
 
 (defun %ensure-jit-code-heap ()
   (unless *jit-code-base*
-    (let* ((len #.(* 64 1024 1024))
+    (let* ((len #.(* 256 1024 1024))
            (p (ff-call (foreign-symbol-address "mmap")
                        :address (%null-ptr)
                        :unsigned-fullword len
@@ -895,7 +895,8 @@ be somewhat larger than what was specified)."
 
 (defun %allocate-code-vector (element-count)
   "Allocate a code-vector of ELEMENT-COUNT u32 words in MAP_JIT.
-Caller fills under (%jit-wp nil) then (%make-code-executable)."
+Header/zero via kernel C (no lisp under WP).  Fill with
+%darwinarm64-jit-install-code or LAP scratch+blit."
   (declare (fixnum element-count))
   (%ensure-jit-code-heap)
   (let* ((payload (ash element-count 2))
@@ -906,12 +907,26 @@ Caller fills under (%jit-wp nil) then (%make-code-executable)."
          (next (%inc-ptr free total)))
     (when (>= (%ptr-to-int next) (%ptr-to-int *jit-code-limit*))
       (error "MAP_JIT code heap exhausted"))
-    (%jit-wp nil)
-    (setf (%%get-unsigned-longlong free 0) header)
-    (do ((o 8 (+ o 4))) ((>= o total))
-      (setf (%get-unsigned-long free o) 0))
+    (ff-call (foreign-symbol-address "darwin_arm64_jit_init_code_vector")
+             :address free
+             :unsigned-doubleword header
+             :unsigned-fullword total
+             :void)
     (setq *jit-code-free* next)
-    (%jit-wp t)
     (%tag-as-misc free)))
+
+(defun %darwinarm64-jit-install-code (code-vector src-ivector nbytes)
+  "Copy NBYTES from SRC-IVECTOR payload into CODE-VECTOR.  WP+icache
+in kernel C — no lisp runs while MAP_JIT pages are RW-only."
+  (declare (fixnum nbytes))
+  (with-macptrs ((d) (s))
+    (%vect-data-to-macptr code-vector d)
+    (%vect-data-to-macptr src-ivector s)
+    (ff-call (foreign-symbol-address "darwin_arm64_jit_install_code")
+             :address d
+             :address s
+             :unsigned-fullword nbytes
+             :void))
+  code-vector)
 
 ) ; progn

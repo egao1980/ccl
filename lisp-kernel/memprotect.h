@@ -82,6 +82,8 @@ void allocation_failure(Boolean pointerp, natural size);
 
 #if defined(DARWIN) && defined(ARM64)
 Boolean darwin_arm64_remap_exec_alias(LogicalAddress start, natural len);
+void darwin_arm64_jit_install_code(void *dest, const void *src, size_t nbytes);
+void darwin_arm64_jit_init_code_vector(void *dest, unsigned long long header, size_t total_bytes);
 #endif
 
 void protect_watched_areas(void);

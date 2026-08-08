@@ -111,17 +111,28 @@
                 (+ code-vector-size prefix-size)
                 (if cross-compiling
                   target::subtag-xcode-vector
-                  arm64::subtag-code-vector))))))
-      #+darwinarm64-target
-      (unless cross-compiling (%jit-wp nil))
+                  arm64::subtag-code-vector)))))
+           #+darwinarm64-target
+           (scratch
+            (unless cross-compiling
+              ;; Assemble into a heap code-vector (RW), then C-blit into
+              ;; MAP_JIT.  Never hold pthread_jit_write_protect_np(0)
+              ;; across lisp — that makes already-loaded JIT fasls NX.
+              (%alloc-misc (+ code-vector-size prefix-size)
+                           arm64::subtag-code-vector)))
+           (fill-target #+darwinarm64-target (or scratch code-vector)
+                        #-darwinarm64-target code-vector))
       (dotimes (j prefix-size)
-        (setf (uvref code-vector j) (pop prefix)))
+        (setf (uvref fill-target j) (pop prefix)))
       (do-dll-nodes (insn seg)
         (unless (eql (arm64::instruction-element-size insn) 0)
-          (setf (uvref code-vector i) (arm64::instruction-word insn))
+          (setf (uvref fill-target i) (arm64::instruction-word insn))
           (incf i)))
       #+darwinarm64-target
-      (unless cross-compiling (%jit-wp t))
+      (unless cross-compiling
+        (%darwinarm64-jit-install-code
+         code-vector scratch
+         (ash (+ code-vector-size prefix-size) 2)))
       (dolist (pair arm64::*constants*)
         (let ((imm (car pair))
               (k (cdr pair)))
@@ -129,7 +140,9 @@
       (setf (uvref constants-vector (1- constants-size)) lfbits
             (uvref constants-vector 0) code-vector)
       ;; Match ARM32/PPC: flush I/D cache before execution.
+      ;; Darwin/arm64 MAP_JIT path already icaches in jit_install_code.
       (unless cross-compiling
+        #-darwinarm64-target
         (%make-code-executable code-vector))
       ;; %alloc-misc returns a misc-tagged vector; hand the resident
       ;; (non-cross) path to function-vector-to-function so both ends name

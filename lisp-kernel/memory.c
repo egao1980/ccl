@@ -33,6 +33,7 @@
 #ifdef DARWIN
 #include <pthread.h>
 #if defined(ARM64)
+#include <libkern/OSCacheControl.h>
 #include <mach/mach.h>
 #include <mach/mach_vm.h>
 #include <mach/mach_error.h>
@@ -56,7 +57,17 @@
 #if defined(DARWIN) && defined(ARM64)
 /* RX alias of lisp image/heap pages at VA+HEAP_EXEC_BIAS.  Used for
    eager dual-map (DARWIN_ARM64_DUAL_MAP=1) and on-demand creation when
-   legacy biased call sites jump into the bias band. */
+   legacy biased call sites jump into the bias band.
+
+   Under DM=0 the NX handler redirects every canonical entry into impure
+   heap code.  Remap is idempotent but mach_vm_remap+protect per fault
+   turns compile-ccl into a multi-hour crawl (sample: >90% of CPU in
+   darwin_arm64_remap_exec_alias).  Probe the bias VA first and skip
+   Mach remap when an RX alias is already present.
+
+   Note: a dense bitmap from IMAGE_BASE does not work — the dynamic
+   heap lives near IMAGE_BASE+2TiB (0x3020…), far outside any small
+   window. */
 Boolean
 darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
 {
@@ -71,6 +82,28 @@ darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
     return true;
   }
   rx = (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
+  {
+    mach_vm_address_t probe = rx;
+    mach_vm_size_t vmsize = 0;
+    natural depth = 0;
+    vm_region_submap_info_data_64_t info;
+    mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
+    kern_return_t q;
+
+    memset(&info, 0, sizeof(info));
+    q = mach_vm_region_recurse(mach_task_self(),
+                               &probe,
+                               &vmsize,
+                               &depth,
+                               (vm_region_recurse_info_t)&info,
+                               &count);
+    if (q == KERN_SUCCESS &&
+        probe <= rx &&
+        (probe + vmsize) >= (rx + (mach_vm_size_t)len) &&
+        (info.protection & VM_PROT_EXECUTE) != 0) {
+      return true;
+    }
+  }
   /* VM_INHERIT_SHARE: fork must keep the RX alias.  INHERIT_NONE left
      children with RW heap only; return-from-fork at a biased PC (or NX
      redirect into the missing alias) infinite-looped in the fault
@@ -104,6 +137,38 @@ darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
     return false;
   }
   return true;
+}
+
+/* Install nbytes from src into a MAP_JIT code-vector payload at dest.
+   WP toggles stay in C so no lisp (including MAP_JIT-resident helpers)
+   runs while JIT pages are non-executable — required for fasl load and
+   LAP emit once fasls also live in MAP_JIT. */
+void
+darwin_arm64_jit_install_code(void *dest, const void *src, size_t nbytes)
+{
+  pthread_jit_write_protect_np(0);
+  if (nbytes) {
+    memcpy(dest, src, nbytes);
+  }
+  pthread_jit_write_protect_np(1);
+  if (nbytes) {
+    sys_icache_invalidate(dest, nbytes);
+  }
+}
+
+/* Zero TOTAL bytes at dest and write an 8-byte uvector header at dest.
+   Used by %allocate-code-vector so header/clear never run under WP from lisp. */
+void
+darwin_arm64_jit_init_code_vector(void *dest, unsigned long long header, size_t total_bytes)
+{
+  pthread_jit_write_protect_np(0);
+  if (total_bytes) {
+    memset(dest, 0, total_bytes);
+  }
+  if (total_bytes >= sizeof(header)) {
+    memcpy(dest, &header, sizeof(header));
+  }
+  pthread_jit_write_protect_np(1);
 }
 #endif
 
