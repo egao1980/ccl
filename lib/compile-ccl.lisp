@@ -632,6 +632,35 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
     (load "ccl:compiler;ARM64;arm64-lap.lisp")
     (format t "~&;MAP_JIT host faslop/LAP installed~%")))
 
+(defun %build-lisp-kernel (&key clean (extra-make-args nil) verbose)
+  "Run make in lisp-kernel/<platform>.  EXTRA-MAKE-ARGS is a list of
+additional make arguments (e.g. \"DUAL_MAP=1\")."
+  (let* ((kdir (format nil "lisp-kernel/~a" (kernel-build-directory)))
+         (j (format nil "~d" (1+ (cpu-count)))))
+    (when clean
+      (run-program "make" (list "-C" kdir "clean")))
+    (format t "~&;Building lisp-kernel~@[ (~{~a~^ ~})~] ..." extra-make-args)
+    (force-output)
+    (with-output-to-string (s)
+      (let* ((args (append (list "-C" kdir "-j" j) extra-make-args))
+             (proc (run-program (make-program) args
+                                :output s :error :output)))
+        (multiple-value-bind (status exit-code)
+            (external-process-status proc)
+          (if (and (eq :exited status) (zerop exit-code))
+            (progn
+              (format t "~&;Kernel built successfully.")
+              (when verbose
+                (format t "~&;kernel build output:~%~a"
+                        (get-output-stream-string s)))
+              (sleep 1))
+            (error "Error(s) during kernel compilation.~%~a"
+                   (or
+                    (describe-external-process-failure
+                     proc
+                     "Developer tools may not be installed correctly.")
+                    (get-output-stream-string s)))))))))
+
 (defun rebuild-ccl (&key update full clean kernel force (reload t) exit
                          reload-arguments verbose optional-features
                          (save-source-locations *ccl-save-source-locations*)
@@ -678,39 +707,16 @@ the lisp and run REBUILD-CCL again.")
                (compile-ccl (not (null force)))
                (if force (xload-level-0 :force) (xload-level-0)))
              (when kernel
-               (when (or clean force)
-                 ;; Do a "make clean".
-                 (run-program "make"
-                              (list "-C"
-                                    (format nil "lisp-kernel/~a"
-                                            (kernel-build-directory))
-                                    "clean")))
-               (format t "~&;Building lisp-kernel ...")
-               (with-output-to-string (s)
-                 (let* ((proc (run-program (make-program)
-                                           (list "-C" 
-                                                 (format nil "lisp-kernel/~a"
-                                                         (kernel-build-directory))
-                                                 "-j"
-                                                            
-                                                 (format nil "~d" (1+ (cpu-count))))
-                                           :output s
-                                           :error :output)))
-                   (multiple-value-bind (status exit-code)
-                       (external-process-status proc)
-                     (if (and (eq :exited status) (zerop exit-code))
-                       (progn
-                         (format t "~&;Kernel built successfully.")
-                         (when verbose
-                           (format t "~&;kernel build output:~%~a"
-                                   (get-output-stream-string s)))
-                         (sleep 1))
-                       (error "Error(s) during kernel compilation.~%~a"
-                              (or
-                               (describe-external-process-failure
-                                proc
-                                "Developer tools may not be installed correctly.")
-                               (get-output-stream-string s))))))))
+               ;; Darwin/arm64: cold-load of arm64-boot.image still has impure
+               ;; heap code-vectors, so it needs DUAL_MAP=1.  After
+               ;; save-application :purify t, rebuild production DUAL_MAP=0.
+               ;; Object files are not CDEFINES-aware — make clean between.
+               #+darwinarm64-target
+               (%build-lisp-kernel :clean (or clean force)
+                                   :extra-make-args '("DUAL_MAP=1")
+                                   :verbose verbose)
+               #-darwinarm64-target
+               (%build-lisp-kernel :clean (or clean force) :verbose verbose))
              (when reload
                (let* ((old-write-date
                        (or (ignore-errors (file-write-date (standard-image-name)))
@@ -747,6 +753,12 @@ the lisp and run REBUILD-CCL again.")
                          (error "Errors (~s ~s) reloading boot image:~&~a"
                                 status exit-code
                                 (get-output-stream-string output))))))))
+             ;; Production kernel after purify (DUAL_MAP=0 default).
+             #+darwinarm64-target
+             (when (and kernel reload)
+               (%build-lisp-kernel :clean t
+                                   :extra-make-args '("DUAL_MAP=0")
+                                   :verbose verbose))
              (when exit
                (quit)))
         (setf (current-directory) cd)))))
