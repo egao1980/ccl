@@ -1281,7 +1281,7 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
     return 0;
   }
 
-#if defined(DARWIN) && defined(ARM64)
+#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
   /* Instruction fetch from the RW lisp heap: restart at the RX dual-map
      alias (HEAP_EXEC_BIAS).  ESR EC 0x20/0x21 = insn abort.  Matching
      PC==FAR catches NX on the canonical VA without needing to parse

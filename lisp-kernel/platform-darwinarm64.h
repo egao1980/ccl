@@ -31,18 +31,24 @@ typedef ucontext_t ExceptionInformation;
 #define IMAGE_BASE_ADDRESS 0x300000000000L
 
 /*
- * Dual-map bias for W^X: lisp heap stays RW at its canonical VA;
- * mach_vm_remap creates an RX alias at VA+HEAP_EXEC_BIAS.  Instruction
- * fetches that NX-fault on the RW mapping are restarted at PC+bias
- * (handle_protection_violation).  Bias must preserve low tag bits
- * (fulltag-misc=12 code-vector entry points).
- *
- * Call sites only add HEAP_EXEC_BIAS when the code-vector VA is in the
- * IMAGE_BASE band (addr>>40 == 0x30).  MAP_JIT AREA_CODE allocations
- * and other non-heap RX regions use a plain br/blr.
+ * W^X policy (Darwin/arm64):
+ *   * Purified / AREA_READONLY code → mprotect RX at the canonical VA
+ *   * Runtime / fasl code → MAP_JIT + pthread_jit_write_protect_np
+ * Dual-map (mach_vm_remap RX alias at VA+HEAP_EXEC_BIAS) is optional
+ * bring-up scaffolding; production builds leave DARWIN_ARM64_DUAL_MAP
+ * at 0.  Re-enable (=1) only if you must cold-load an impure boot image
+ * whose code still lives on the RW IMAGE_BASE heap.
  */
+#ifndef DARWIN_ARM64_DUAL_MAP
+#define DARWIN_ARM64_DUAL_MAP 0
+#endif
+#if DARWIN_ARM64_DUAL_MAP
 #ifndef HEAP_EXEC_BIAS
 #define HEAP_EXEC_BIAS 0x004000000000ULL
+#endif
+#else
+#undef HEAP_EXEC_BIAS
+#define HEAP_EXEC_BIAS 0ULL
 #endif
 
 #include "lisptypes.h"

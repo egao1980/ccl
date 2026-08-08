@@ -53,7 +53,7 @@
 
 #define DEBUG_MEMORY 0
 
-#if defined(DARWIN) && defined(ARM64)
+#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
 /* RX alias of lisp image/heap pages (see HEAP_EXEC_BIAS). */
 static Boolean
 darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
@@ -206,15 +206,15 @@ CommitMemory (LogicalAddress start, natural len)
 
   for (i = 0; i < 3; i++) {
 #if defined(DARWIN) && defined(ARM64)
-    /* W^X: RWX mmap is rejected; map RW and dual-map an RX alias
-       (HEAP_EXEC_BIAS) so heap code can run without making the
-       canonical lisp VA executable. */
+    /* W^X: RWX mmap is rejected.  Map RW; optional dual-map RX alias
+       when DARWIN_ARM64_DUAL_MAP (impure heap code).  Production uses
+       purify RX + MAP_JIT instead. */
     addr = mmap(start, len, MEMPROTECT_RW, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
 #else
     addr = mmap(start, len, MEMPROTECT_RWX, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
 #endif
     if (addr == start) {
-#if defined(DARWIN) && defined(ARM64)
+#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
       if (!darwin_arm64_remap_exec_alias(start, len)) {
         return false;
       }
@@ -242,7 +242,7 @@ UnCommitMemory (LogicalAddress start, natural len) {
   }
 #else
   if (len) {
-#if defined(DARWIN) && defined(ARM64)
+#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
     /* Drop RX dual-map alias before replacing the RW mapping (stale
        alias at VA+HEAP_EXEC_BIAS would otherwise remain executable). */
     if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
@@ -355,7 +355,7 @@ ProtectMemory(LogicalAddress addr, natural nbytes)
     if (status == ENOMEM) {
       void *mapaddr = mmap(addr,nbytes, prot, MAP_ANON|MAP_PRIVATE|MAP_FIXED,-1,0);
       if (mapaddr != MAP_FAILED) {
-#if defined(DARWIN) && defined(ARM64)
+#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
         /* mmap MAP_FIXED replaced the RW source of any RX alias — drop
            the stale alias.  Guards use PROT_NONE so no RX remap needed. */
         if ((natural)addr >= (natural)IMAGE_BASE_ADDRESS) {

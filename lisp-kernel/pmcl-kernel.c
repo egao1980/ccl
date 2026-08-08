@@ -2274,12 +2274,11 @@ xMakeDataExecutable(BytePtr start, natural nbytes)
      which is not the same quantity as a maintenance granule.  */
 #if defined(DARWIN)
   /* Apple Silicon: CTR_EL0 is not readable at EL0 (SIGILL). Use the
-     Darwin libkern helper instead of mrs + flush_cache_lines.
-     Also invalidate the RX dual-map alias when the range is in the
-     lisp image/heap (HEAP_EXEC_BIAS). */
+     Darwin libkern helper instead of mrs + flush_cache_lines. */
   if (nbytes) {
     sys_icache_invalidate(start, nbytes);
-#if defined(ARM64)
+#if defined(ARM64) && DARWIN_ARM64_DUAL_MAP
+    /* Also invalidate the RX dual-map alias when present. */
     if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
       sys_icache_invalidate(start + HEAP_EXEC_BIAS, nbytes);
     }

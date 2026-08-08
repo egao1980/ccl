@@ -106,15 +106,11 @@ Added:
   `udf #0` (re-enters Mach for `do_pseudo_sigreturn`)
 * `tools/xdarwinarm64.lisp` (alias of the darwinarm64 cross-setup)
 
-Still open for Darwin: full dual-map removal after purified images
-(experimental `:purify t` smoke is green —
-`tools/run-darwin-purify-smoke.sh` — but fasl cold-load still dual-maps
-IMAGE_BASE code, so production save stays `:purify nil`); true ASLR
-rnil-relative statics (provisional FIXED `STATIC_BASE` remains).
-Cocoa arm64 ObjC CDB regenerated (Foundation+AppKit, `-x objective-c`,
-`:pending` macro parse + `FILTER_FFI_MACROS=frameworks`) —
-`tools/darwin-cocoa-smoke.lisp`.  libc arm64 regen includes **math.h**
-(Availability filter + Half/Float16 handling).
+Dual-map dropped for production: `:purify t` + MAP_JIT fasl/runtime
+(`DARWIN_ARM64_DUAL_MAP=0`, no HEAP_EXEC_BIAS).  Still open: true ASLR
+rnil-relative statics (provisional FIXED `STATIC_BASE` remains); impure
+boot cold-load needs `DARWIN_ARM64_DUAL_MAP=1` if rebuilt from scratch.
+Cocoa arm64 ObjC CDB regenerated; libc includes **math.h**.
 `_SPffcall` stack-arg SP bump (GPR 9+), Darwin variadic-on-stack
 (`:variadic` sentinel), and Darwin natural-size packing for
 non-variadic stack overflow landed.  MAP_JIT code heap + conditional

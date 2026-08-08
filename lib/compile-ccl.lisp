@@ -697,7 +697,7 @@ the lisp and run REBUILD-CCL again.")
                                                 #-darwinarm64-target
                                                 "(save-application ~s)"
                                                 #+darwinarm64-target
-                                                "(save-application ~s :purify nil)"
+                                                "(save-application ~s :purify t)"
                                                 (standard-image-name)))
                    (with-output-to-string (output)
                      (multiple-value-bind (status exit-code)

@@ -2653,8 +2653,8 @@ purify(TCR *tcr, signed_natural param)               /* ppc-gc.c:2001-2048 */
 #if defined(DARWIN) && defined(ARM64)
     /* ProtectMemory is PROT_NONE on Darwin/arm64 (stack guards).  Pure
        code needs RX on the canonical VA — same as image.c AREA_READONLY.
-       Dual-map RX alias remains for any unpurified IMAGE_BASE heap code;
-       MAP_JIT code is outside that band and needs no alias. */
+       With DARWIN_ARM64_DUAL_MAP=0, this is the only executable mapping
+       for purified image code (fasl/runtime uses MAP_JIT). */
     {
       natural span = align_to_power_of_2(new_pure_area->active - new_pure_area->low,
                                          log2_page_size);

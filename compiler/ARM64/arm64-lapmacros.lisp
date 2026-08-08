@@ -68,41 +68,12 @@
          (blr imm1))
       (error "unknown subprimitive name ~s" spname))))
 
-;;; Darwin W^X: bias IMAGE_BASE heap code-vectors to the RX dual-map alias.
-;;; MAP_JIT / other RX regions must not be biased (plain br/blr).
+;;; Darwin W^X: dual-map bias retired (purify RX + MAP_JIT).  Plain br/blr.
 (defarm64lapmacro br-codevector (reg)
-  (let* ((darwin-p (and (boundp '*target-backend*)
-                        *target-backend*
-                        (eq (backend-name *target-backend*) :darwinarm64)))
-         (scratch (if (member reg '(imm0 arm64::imm0)) 'imm1 'imm0))
-         (skip (gensym "skip-bias")))
-    (if darwin-p
-      `(progn
-         (lsr ,scratch ,reg (:$ 40))
-         (cmp ,scratch (:$ #x30))
-         (b.ne ,skip)
-         (movz ,scratch (:$ #x40 :lsl 32))
-         (add ,reg ,reg ,scratch)
-         ,skip
-         (br ,reg))
-      `(br ,reg))))
+  `(br ,reg))
 
 (defarm64lapmacro blr-codevector (reg)
-  (let* ((darwin-p (and (boundp '*target-backend*)
-                        *target-backend*
-                        (eq (backend-name *target-backend*) :darwinarm64)))
-         (scratch (if (member reg '(imm0 arm64::imm0)) 'imm1 'imm0))
-         (skip (gensym "skip-bias")))
-    (if darwin-p
-      `(progn
-         (lsr ,scratch ,reg (:$ 40))
-         (cmp ,scratch (:$ #x30))
-         (b.ne ,skip)
-         (movz ,scratch (:$ #x40 :lsl 32))
-         (add ,reg ,reg ,scratch)
-         ,skip
-         (blr ,reg))
-      `(blr ,reg))))
+  `(blr ,reg))
 
 (defarm64lapmacro set-nargs (n)
   (check-type n (unsigned-byte 13))
