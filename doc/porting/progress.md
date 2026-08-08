@@ -16,8 +16,12 @@
   cocoa CDB shims (`YES`/`NO`, msgsend prototypes, `instancetype`/generics/
   `struct id`, NSConstantString); `initialized-nsobject-p` → `:objc_object`;
   soft `ns:protocol` printer when Protocol absent from modern objc-classes.cdb.
-  N-word/varargs sends still preemptively stubbed. Still open: ASLR; strip
-  dual-map; enable real N-word/varargs; Protocol class CDB inject.
+* **N-word/varargs ungated** (lazy `objc-method-signature-info` compile).
+  `#/substringWithRange:` (NSRange) works ~most runs after tip
+  `expand-ff-call` + `aapcs64-ff-call` reload + explicit `deref-macptr`, but
+  still heisenbugs (all-or-nothing bad compile). `#/stringWithFormat:` (varargs)
+  still SIGSEGVs when N-word path is live. Still open: harden N-word RA;
+  fix arm64 varargs send; ASLR; strip dual-map; Protocol CDB inject.
 
 ## August 2026 — Darwin/arm64 boot image (egao1980)
 

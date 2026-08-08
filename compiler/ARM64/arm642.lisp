@@ -9271,12 +9271,15 @@
                                 (t
                                  (store-overflow-gpr ptr spec)))))))
                 ;; N-word memory structs (expand-ff-call emits N for
-                ;; 64<bits<=128): load N consecutive doublewords from the
-                ;; macptr value and pass them in consecutive GPRs (then
-                ;; overflow), matching x8664/ppc64.
+                ;; 64<bits≤128): load N consecutive doublewords from the
+                ;; macptr into consecutive GPRs (then overflow).
+                ;; Explicit deref-macptr — do not rely on RA/type inference
+                ;; to unbox; tagged macptr-as-address reads lisp headers
+                ;; and objc_msgSend returns garbage (heisenbug).
                 ((typep spec 'unsigned-byte)
+                 (arm642-one-targeted-reg-form seg valform ($ arm64::arg_z))
                  (with-imm-target () (ptr :address)
-                   (arm642-one-targeted-reg-form seg valform ptr)
+                   (! deref-macptr ptr ($ arm64::arg_z))
                    (with-imm-target (ptr) (r :u64)
                      (dotimes (i spec)
                        (! mem-ref-c-doubleword r ptr

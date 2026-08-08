@@ -771,24 +771,6 @@
   function
   super-function)
 
-(defun %objc-sig-varargs-p (sig)
-  (eq (car (last (cdr sig))) :void))
-
-(defun %objc-sig-needs-nword-struct-p (sig)
-  "True if SIG has a by-value record arg/result that aapcs64 still
-rejects (64 < bits ≤ 128 → N-word expand-ff-call)."
-  (dolist (spec sig nil)
-    (handler-case
-        (let* ((ft (parse-foreign-type spec)))
-          (when (typep ft 'foreign-record-type)
-            (let* ((bits (or (foreign-type-bits ft)
-                             (progn
-                               (ensure-foreign-type-bits ft)
-                               (foreign-type-bits ft)))))
-              (when (and (integerp bits) (> bits 64) (<= bits 128))
-                (return t)))))
-      (error () nil))))
-
 (defun %objc-unsupported-send-stub (sig reason)
   (warn "objc-method-signature-info: skip ~s: ~a" sig reason)
   (lambda (&rest args)
@@ -796,42 +778,35 @@ rejects (64 < bits ≤ 128 → N-word expand-ff-call)."
     (error "ObjC send for signature ~s not supported on this backend (~a)"
            sig reason)))
 
+;;; Compile send functions lazily on first use.  Eager compile during
+;;; cocoa method registration used to SO the compiler when thousands of
+;;; init* signatures (incl. N-word / varargs) were compiled up front;
+;;; arm64 backends for those shapes now exist, but lazy is still safer.
 (defun objc-method-signature-info (sig)
   (values
    (or (gethash sig *objc-method-signatures*)
-       (setf (gethash sig *objc-method-signatures*)
-             (make-objc-method-signature-info
-              :type-signature sig
-              ;; Darwin/arm64: skip compile for known-unsupported shapes
-              ;; (N-word structs, varargs stub) so registering thousands of
-              ;; init* messages does not blow the stack in the compiler.
-              :function (cond
-                          ((%objc-sig-varargs-p sig)
-                           (%objc-unsupported-send-stub
-                            sig "ObjC varargs send not yet supported on arm64"))
-                          ((%objc-sig-needs-nword-struct-p sig)
-                           (%objc-unsupported-send-stub
-                            sig "aapcs64-ff-call: N-word struct arg not yet supported"))
-                          (t
-                           (handler-case
-                               (compile-send-function-for-signature sig)
-                             (error (c)
-                               (%objc-unsupported-send-stub sig c)))))
-              :super-function (cond
-                                ((or (%objc-sig-varargs-p sig)
-                                     (%objc-sig-needs-nword-struct-p sig))
-                                 (lambda (&rest args)
-                                   (declare (ignore args))
-                                   (error "ObjC super-send for signature ~s not supported on this backend" sig)))
-                                (t
-                                 (handler-case
-                                     (%compile-send-function-for-signature sig t)
-                                   (error (c)
-                                     (declare (ignore c))
-                                     (lambda (&rest args)
-                                       (declare (ignore args))
-                                       (error "ObjC super-send for signature ~s not supported on this backend" sig)))))))))))
-
+       (let ((info (make-objc-method-signature-info :type-signature sig)))
+         (setf (objc-method-signature-info-function info)
+               (lambda (&rest args)
+                 (let ((f (handler-case
+                              (compile-send-function-for-signature sig)
+                            (error (c)
+                              (%objc-unsupported-send-stub sig c)))))
+                   (setf (objc-method-signature-info-function info) f)
+                   (apply f args)))
+               (objc-method-signature-info-super-function info)
+               (lambda (&rest args)
+                 (let ((f (handler-case
+                              (%compile-send-function-for-signature sig t)
+                            (error (c)
+                              (declare (ignore c))
+                              (lambda (&rest a)
+                                (declare (ignore a))
+                                (error "ObjC super-send for signature ~s not supported on this backend"
+                                       sig))))))
+                   (setf (objc-method-signature-info-super-function info) f)
+                   (apply f args)))
+               (gethash sig *objc-method-signatures*) info)))))
 (defmethod make-load-form ((siginfo objc-method-signature-info) &optional env)
   (declare (ignore env))
   `(objc-method-signature-info ',(objc-method-signature-info-type-signature siginfo)))
