@@ -12,12 +12,36 @@
 #   ./tools/rebuild-darwinarm64-unbiased.sh
 #
 # Log: /tmp/darwinarm64-rebuild-unbiased.log
+# Pid: /tmp/darwinarm64-rebuild.pid
 # Needs: Rosetta dx86cl64, darwin-arm64-headers, tools/with-timeout.
 
 set -e
+
+# Detach into a new session on first entry.  Cursor/agent shells often
+# tear down their process group when the tool returns; without setsid
+# that kills the with-timeout waiter and orphans dx86cl64 mid-bootstrap.
+if [ "${CCL_REBUILD_SESSION:-}" != "1" ]; then
+  export CCL_REBUILD_SESSION=1
+  export CCL_REBUILD_LOG="${CCL_REBUILD_LOG:-/tmp/darwinarm64-rebuild-unbiased.log}"
+  : > "$CCL_REBUILD_LOG"
+  exec perl -e '
+    use strict;
+    use warnings;
+    use POSIX qw(setsid);
+    setsid() or die "setsid: $!\n";
+    my $log = $ENV{CCL_REBUILD_LOG};
+    open STDIN,  "</dev/null"   or die "stdin: $!\n";
+    open STDOUT, ">>", $log     or die "stdout: $!\n";
+    open STDERR, ">&STDOUT"     or die "stderr: $!\n";
+    exec @ARGV;
+    die "exec: $!\n";
+  ' -- "$0" "$@"
+fi
+
 CCL_DIR=$(cd "$(dirname "$0")/.." && pwd)
 cd "$CCL_DIR"
-LOG=/tmp/darwinarm64-rebuild-unbiased.log
+LOG="${CCL_REBUILD_LOG:-/tmp/darwinarm64-rebuild-unbiased.log}"
+PIDFILE=/tmp/darwinarm64-rebuild.pid
 WT="$CCL_DIR/tools/with-timeout"
 BOOT_TIMEOUT="${CCL_BOOTSTRAP_TIMEOUT:-3600}"
 COLD_TIMEOUT="${CCL_COLDLOAD_TIMEOUT:-1800}"
@@ -25,10 +49,28 @@ SMOKE_TIMEOUT="${CCL_SMOKE_TIMEOUT:-90}"
 CLEAN_SMOKE_TIMEOUT="${CCL_CLEAN_SMOKE_TIMEOUT:-180}"
 PROD_DM="${DARWIN_ARM64_DUAL_MAP:-0}"
 NCPU=$(sysctl -n hw.ncpu 2>/dev/null || echo 4)
-: > "$LOG"
 
-log() { echo "$*" | tee -a "$LOG"; }
-fail() { echo "$*" | tee -a "$LOG" >&2; exit 1; }
+echo $$ > "$PIDFILE"
+# stdout/stderr already append to $LOG after setsid — do not truncate again.
+
+log() { echo "$*"; }
+fail() { echo "$*" >&2; rm -f "$PIDFILE"; exit 1; }
+finish() { rm -f "$PIDFILE"; }
+
+# Forward stop signals to children (with-timeout forwards to its tree).
+# Killing only this shell otherwise orphans dx86cl64 in its own pgrp.
+stop_children() {
+  log ";; signal: stopping child processes"
+  for c in $(pgrep -P $$ 2>/dev/null || true); do
+    kill -TERM "$c" 2>/dev/null || true
+  done
+  sleep 2
+  for c in $(pgrep -P $$ 2>/dev/null || true); do
+    kill -KILL "$c" 2>/dev/null || true
+  done
+}
+trap 'stop_children; finish; exit 143' TERM INT HUP
+trap finish EXIT
 
 test -x ./dx86cl64 || fail "missing ./dx86cl64 (host bootstrap)"
 test -d darwin-arm64-headers/libc || fail "missing darwin-arm64-headers (cdb populate)"
