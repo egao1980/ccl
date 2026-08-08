@@ -614,6 +614,24 @@ not runtime errors reported by a successfully created process."
           (lisp-implementation-version))
   (format stream "~&Path to source code: ~s" (truename "ccl:")))
 
+#+darwinarm64-target
+(defun %ensure-darwinarm64-map-jit-host-loader ()
+  "Install tip MAP_JIT $fasl-code-vector + LAP into the live host before
+compile-ccl.  Level-0 nfasload is not reloaded during rebuild; without this
+the first self-host keeps the heap faslop and pays NX-per-call on every
+loaded fasl (same approach as the surgical faslop bootstrap)."
+  (let ((*load-verbose* t)
+        (*compile-verbose* nil)
+        (*save-source-locations* nil)
+        (*warn-if-redefine-kernel* nil))
+    (format t "~&;Installing Darwin/arm64 MAP_JIT fasl loader into host image~%")
+    ;; arm64env: fill missing helpers + install faslop (does not clobber
+    ;; existing %jit-wp / %allocate-code-vector from the running image).
+    (load "ccl:lib;arm64env.lisp")
+    ;; Tip LAP: assemble into heap scratch, C-blit into MAP_JIT.
+    (load "ccl:compiler;ARM64;arm64-lap.lisp")
+    (format t "~&;MAP_JIT host faslop/LAP installed~%")))
+
 (defun rebuild-ccl (&key update full clean kernel force (reload t) exit
                          reload-arguments verbose optional-features
                          (save-source-locations *ccl-save-source-locations*)
@@ -652,6 +670,10 @@ the lisp and run REBUILD-CCL again.")
                                            :type (pathname-type *.fasl-pathname*))
                             "ccl:**;")))
                  (delete-file f)))
+             ;; Host still has level-0 faslops until xload; install MAP_JIT
+             ;; loader before compile-ccl so the first rebuild is fast.
+             #+darwinarm64-target
+             (%ensure-darwinarm64-map-jit-host-loader)
              (with-global-optimization-settings ()
                (compile-ccl (not (null force)))
                (if force (xload-level-0 :force) (xload-level-0)))

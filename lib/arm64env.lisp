@@ -7,6 +7,7 @@
 (defconstant $numarm64saveregs 4)
 (defconstant $numarm64argregs 3)
 
+
 (defconstant arm64-nonvolatile-registers-mask
   (logior (ash 1 arm64::save0)
           (ash 1 arm64::save1)
@@ -82,70 +83,77 @@
 ;;; Darwin/arm64 MAP_JIT helpers must be visible to the compiler modules
 ;;; (arm64-lap loads after arm64env during rebuild-ccl).  Level-0
 ;;; arm64-utils keeps the same definitions for the boot image / cold-load.
+;;;
+;;; Do NOT redefine helpers that already exist in the running image: old LAP
+;;; may call %jit-wp across lisp, and swapping it mid-rebuild SEGVs.  Only
+;;; fill gaps, then install the MAP_JIT faslop (see also rebuild-ccl).
 #+(and darwinarm64-target)
 (progn
   (defvar *jit-code-base* nil)
   (defvar *jit-code-limit* nil)
   (defvar *jit-code-free* nil)
 
-  (defun %jit-wp (on)
-    (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
-             :int (if on 1 0) :void))
+  (unless (fboundp '%jit-wp)
+    (defun %jit-wp (on)
+      (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
+               :int (if on 1 0) :void)))
 
-  (defun %ensure-jit-code-heap ()
-    (unless *jit-code-base*
-      (let* ((len #.(* 256 1024 1024))
-             (p (ff-call (foreign-symbol-address "mmap")
-                         :address (%null-ptr)
-                         :unsigned-fullword len
-                         :int #x7
-                         :int (logior #x1002 #x0800)
-                         :int -1 :long 0 :address)))
-        (when (or (%null-ptr-p p) (eql (%ptr-to-int p) -1))
-          (error "mmap(MAP_JIT) code heap failed"))
-        (setq *jit-code-base* p
-              *jit-code-limit* (%inc-ptr p len)
-              *jit-code-free* p)))
-    *jit-code-base*)
+  (unless (fboundp '%ensure-jit-code-heap)
+    (defun %ensure-jit-code-heap ()
+      (unless *jit-code-base*
+        (let* ((len #.(* 256 1024 1024))
+               (p (ff-call (foreign-symbol-address "mmap")
+                           :address (%null-ptr)
+                           :unsigned-fullword len
+                           :int #x7
+                           :int (logior #x1002 #x0800)
+                           :int -1 :long 0 :address)))
+          (when (or (%null-ptr-p p) (eql (%ptr-to-int p) -1))
+            (error "mmap(MAP_JIT) code heap failed"))
+          (setq *jit-code-base* p
+                *jit-code-limit* (%inc-ptr p len)
+                *jit-code-free* p)))
+      *jit-code-base*))
 
-  (defun %allocate-code-vector (element-count)
-    "Allocate a code-vector of ELEMENT-COUNT u32 words in MAP_JIT."
-    (declare (fixnum element-count))
-    (%ensure-jit-code-heap)
-    (let* ((payload (ash element-count 2))
-           (total (logandc2 (+ payload 8 15) 15))
-           (header (logior (ash element-count arm64::num-subtag-bits)
-                           arm64::subtag-code-vector))
-           (free *jit-code-free*)
-           (next (%inc-ptr free total)))
-      (when (>= (%ptr-to-int next) (%ptr-to-int *jit-code-limit*))
-        (error "MAP_JIT code heap exhausted"))
-      (ff-call (foreign-symbol-address "darwin_arm64_jit_init_code_vector")
-               :address free
-               :unsigned-doubleword header
-               :unsigned-fullword total
-               :void)
-      (setq *jit-code-free* next)
-      (%tag-as-misc free)))
+  (unless (fboundp '%allocate-code-vector)
+    (defun %allocate-code-vector (element-count)
+      "Allocate a code-vector of ELEMENT-COUNT u32 words in MAP_JIT."
+      (declare (fixnum element-count))
+      (%ensure-jit-code-heap)
+      (let* ((payload (ash element-count 2))
+             (total (logandc2 (+ payload 8 15) 15))
+             (header (logior (ash element-count arm64::num-subtag-bits)
+                             arm64::subtag-code-vector))
+             (free *jit-code-free*)
+             (next (%inc-ptr free total)))
+        (when (>= (%ptr-to-int next) (%ptr-to-int *jit-code-limit*))
+          (error "MAP_JIT code heap exhausted"))
+        (ff-call (foreign-symbol-address "darwin_arm64_jit_init_code_vector")
+                 :address free
+                 :unsigned-doubleword header
+                 :unsigned-fullword total
+                 :void)
+        (setq *jit-code-free* next)
+        (%tag-as-misc free))))
 
-  (defun %darwinarm64-jit-install-code (code-vector src-ivector nbytes)
-    "Copy NBYTES from SRC-IVECTOR into CODE-VECTOR.  WP+icache in kernel C."
-    (declare (fixnum nbytes))
-    (with-macptrs ((d) (s))
-      (%vect-data-to-macptr code-vector d)
-      (%vect-data-to-macptr src-ivector s)
-      (ff-call (foreign-symbol-address "darwin_arm64_jit_install_code")
-               :address d
-               :address s
-               :unsigned-fullword nbytes
-               :void))
-    code-vector)
+  (unless (fboundp '%darwinarm64-jit-install-code)
+    (defun %darwinarm64-jit-install-code (code-vector src-ivector nbytes)
+      "Copy NBYTES from SRC-IVECTOR into CODE-VECTOR.  WP+icache in kernel C."
+      (declare (fixnum nbytes))
+      (with-macptrs ((d) (s))
+        (%vect-data-to-macptr code-vector d)
+        (%vect-data-to-macptr src-ivector s)
+        (ff-call (foreign-symbol-address "darwin_arm64_jit_install_code")
+                 :address d
+                 :address s
+                 :unsigned-fullword nbytes
+                 :void))
+      code-vector))
 
   ;; Install MAP_JIT $fasl-code-vector (opcode 2) into the running image.
   ;; Level-0 nfasload is not reloaded during compile-ccl, so without this
   ;; first rebuild-ccl keeps the heap faslop and pays NX-per-call on every
-  ;; loaded fasl.  Same approach as exposing the helpers above: arm64env
-  ;; loads before arm64-lap / the bulk of the rebuild.
+  ;; loaded fasl.
   (setf (svref *fasl-dispatch-table* 2)
         (nfunction $fasl-code-vector
           (lambda (s)
