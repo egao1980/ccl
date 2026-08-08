@@ -17,7 +17,10 @@
                     (eq (car f) 'define-arm64-vinsn)
                     (let ((name (cadr f)))
                       (or (eq name '%foreign-stack-pointer)
-                          (and (consp name) (eq (car name) 'alloc-variable-c-frame)))))
+                          (and (consp name)
+                               (member (car name)
+                                       '(alloc-variable-c-frame
+                                         discard-c-frame))))))
           do (eval f))))
 
 ;; arm642 acode handlers.
@@ -46,8 +49,15 @@
   (dolist (f (nreverse forms)) (eval f)))
 
 (use-interface-dir :libc)
-(let ((pid (eval '(#_getpid))))
+;; True interpreter path: funcall of %ff-call (nx1 would rewrite
+;; (%ff-call …) to aapcs64-ff-call when compiling).
+(let* ((addr (%reference-external-entry-point (external "getpid")))
+       (pid (%ff-call addr :signed-fullword)))
   (unless (and (integerp pid) (> pid 0))
-    (error "interp getpid => ~s" pid))
+    (error "interp %ff-call getpid => ~s" pid))
+  ;; Also exercise sharp-macro → eval (interprets %ff-call).
+  (let ((pid2 (eval '(#_getpid))))
+    (unless (eql pid pid2)
+      (error "eval #_getpid => ~s, direct %ff-call => ~s" pid2 pid)))
   (format t "~&DARWIN-INTERP-FF-CALL-SMOKE-OK pid=~d~%" pid))
 (quit 0)

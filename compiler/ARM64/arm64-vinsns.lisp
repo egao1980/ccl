@@ -300,12 +300,15 @@
 (define-arm64-vinsn (alloc-variable-c-frame) (()
                                               ((n-c-args :lisp))
                                               ((header (:u64 #.arm64::imm0))
-                                               (size :u64)
-                                               ;; Wired :imm is not a valid
-                                               ;; allocate-temporary-vreg class
-                                               ;; (only unwired :imm is); use
-                                               ;; :u64 like header.  Imm0/imm1
-                                               ;; pinning retained for pc_luser_xp.
+                                               (size (:u64 #.arm64::imm2))
+                                               ;; prevsp must be imm1 for
+                                               ;; pc_luser_xp stp recognition.
+                                               ;; size must not alias imm1
+                                               ;; (mov prevsp sp would clobber
+                                               ;; it before sub sp,sp,size).
+                                               ;; Wired :imm is invalid in
+                                               ;; allocate-temporary-vreg;
+                                               ;; use :u64 for both.
                                                (prevsp (:u64 #.arm64::imm1))))
   (add size n-c-args (:$ '6))        ;+ header + prevsp + 4-word frame
   (add size size (:$ (:apply 1- arm64::dnode-size))) ;round byte size up...
