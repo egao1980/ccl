@@ -2,22 +2,30 @@
 ;;;;
 ;;;;   ./darm64cl --no-init --batch < tools/darwin-variadic-smoke.lisp
 ;;;;
-;;;; Reloads patched expander / nx1 / aapcs64-ff-call from source when
-;;;; the image predates this change.
+;;;; Reloads patched expander / nx1 / aapcs64-ff-call (+ pack helpers)
+;;;; from source when the image predates this change.
 (in-package :ccl)
 (setq *warn-if-redefine-kernel* nil)
 (load "lib/foreign-types.lisp")
 (load "compiler/nx1.lisp")
 (let* ((src (merge-pathnames "compiler/ARM64/arm642.lisp" (ccl-directory)))
-       (form (with-open-file (s src)
-               (loop for f = (read s nil s)
-                     until (eq f s)
-                     when (and (consp f)
-                               (eq (car f) 'defarm642)
-                               (eq (cadr f) 'arm642-aapcs64-ff-call))
-                       return f
-                     finally (error "aapcs64-ff-call def not found")))))
-  (eval form))
+       (helpers ())
+       (ffcall nil))
+  (with-open-file (s src)
+    (loop for f = (read s nil s)
+          until (eq f s)
+          do (cond ((and (consp f)
+                         (member (car f) '(defun defarm642))
+                         (member (cadr f)
+                                 '(arm642-aapcs64-stack-arg-bytes
+                                   arm642-align-up
+                                   arm642-aapcs64-ff-call)))
+                    (if (eq (cadr f) 'arm642-aapcs64-ff-call)
+                      (setq ffcall f)
+                      (push f helpers))))))
+  (dolist (h (nreverse helpers)) (eval h))
+  (unless ffcall (error "aapcs64-ff-call def not found"))
+  (eval ffcall))
 (use-interface-dir :libc)
 (rlet ((buf (:array :char 64)))
   (dotimes (i 64) (setf (%get-byte buf i) 0))

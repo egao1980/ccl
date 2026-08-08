@@ -108,15 +108,18 @@ Added:
 
 Still open for Darwin: full dual-map removal after purified images;
 true ASLR rnil-relative statics (code already uses rnil for access —
-provisional FIXED `STATIC_BASE` remains); natural-size packing for
-non-variadic stack overflow; regenerate `darwin-arm64-headers` `.cdb`s
-(bring-up = x86 copy, see `doc/porting/darwin-cdb.md`).
-`_SPffcall` stack-arg SP bump (GPR 9+) and Darwin variadic-on-stack
-(`:variadic` sentinel) landed.  MAP_JIT code heap + conditional
+provisional FIXED `STATIC_BASE` remains); expand
+`tools/darwin-arm64-cdb/libc-core-populate.sh` until libc/Cocoa CDBs
+can replace the x86 bring-up copy (pipeline verified; core-only must
+not stay installed — see `doc/porting/darwin-cdb.md`).
+`_SPffcall` stack-arg SP bump (GPR 9+), Darwin variadic-on-stack
+(`:variadic` sentinel), and Darwin natural-size packing for
+non-variadic stack overflow landed.  MAP_JIT code heap + conditional
 `HEAP_EXEC_BIAS` (IMAGE_BASE only) landed for runtime compile;
 fasl cold-load still uses the dual-mapped heap (WP-off would NX
 earlier MAP_JIT pages).  Mach exception ports are on
-(`use_mach_exception_handling`).
+(`use_mach_exception_handling`).  Save policy remains `:purify nil`
+(`tools/save-darwinarm64-image.lisp`) until dual-map is dropped.
 
 ## May 21 – June 23
 I looked a bit at Manfred Bergmann’s code at

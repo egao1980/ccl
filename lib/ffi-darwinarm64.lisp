@@ -12,14 +12,13 @@
 ;;; (ff-call …) under the Darwin FTD became literal NIL — cold-load
 ;;; %MAKE-RWLOCK-PTR then did `mov xN,rnil` + trap-unless-macptr.
 
-;;; Reuse Linux AAPCS64 callback generators until Darwin-specific
-;;; natural-size stack packing for non-variadic overflow is wired.
-;;; Fixed-arity stack overflow (GPR 9+) is handled by _SPffcall +
-;;; arm642-aapcs64-ff-call.  Darwin variadic-on-stack: `%external-call-
-;;; expander` emits a `:variadic` sentinel at the CDB `:void` boundary;
-;;; aapcs64-ff-call then forces following args onto 8-byte stack slots
-;;; (Apple ABI).  Ensures ARM64-LINUX package + definitions exist when
-;;; only Darwin is loaded.
+;;; Reuse Linux AAPCS64 callback generators.  Fixed-arity stack overflow
+;;; (GPR 9+) is handled by _SPffcall + arm642-aapcs64-ff-call.  Darwin
+;;; non-variadic overflow uses natural-size packing in aapcs64-ff-call;
+;;; variadic-on-stack: `%external-call-expander` emits a `:variadic`
+;;; sentinel at the CDB `:void` boundary; aapcs64-ff-call then forces
+;;; following args onto 8-byte stack slots (Apple ABI).  Ensures
+;;; ARM64-LINUX package + definitions exist when only Darwin is loaded.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (unless (find-package "ARM64-LINUX")
     (make-package "ARM64-LINUX" :use '("CL" "CCL")))

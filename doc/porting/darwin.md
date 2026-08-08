@@ -197,11 +197,10 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
 
 * Backend expects `ccl:darwin-arm64-headers;`.  The tree is **gitignored**
   (`/*headers/`) like every other `*headers*` directory.
-* Bring-up copy is a **byte-identical clone of `darwin-x86-headers64`**,
-  not an arm64 regeneration.  Fixed-arity `#_`/`#$` mostly need names;
-  regenerate before shipping Cocoa/arch-sensitive layouts via
-  `ccl-ffigen` + Apple Silicon SDK (`-arch arm64`, current MacOSX.sdk).
-  See `doc/porting/darwin-cdb.md`.
+* Bring-up copy is a **byte-identical clone of `darwin-x86-headers64`**.
+  `tools/darwin-arm64-cdb/` + ffigen5 can regenerate a libc **core**
+  (`-arch arm64`, current SDK); do not install core-only over the full
+  bring-up CDB.  See `doc/porting/darwin-cdb.md`.
 
 ### Apple AAPCS64 FFI
 
@@ -219,8 +218,11 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
   `:variadic` sentinel at the CDB `:void` boundary; `aapcs64-ff-call`
   forces following args onto 8-byte stack slots (Apple ABI). Linux
   ignores the sentinel. Smoke: `tools/darwin-variadic-smoke.lisp`.
-* Still open: natural-size packing for non-variadic stack overflow of
-  odd-sized types (Darwin packs by natural alignment; AAPCS64 pads to 8).
+* **Darwin natural-size packing (non-variadic overflow):** done.
+  `aapcs64-ff-call` packs stack overflow by natural size/alignment
+  (char@0, short@2, int@4) on `:darwinarm64`; Linux keeps 8-byte slots.
+  Vinsns: `set-c-arg-{byte,halfword,fullword,doubleword-bytes}`.
+  Smoke: `tools/darwin-pack-overflow-smoke.lisp`.
 
 ### Smaller Darwin arm64 landmines (status)
 

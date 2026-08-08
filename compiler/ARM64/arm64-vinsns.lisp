@@ -6556,6 +6556,40 @@
   (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0
                                  (:apply ash argnum 3))))))
 
+;;; Darwin non-variadic stack overflow: natural-size packing (Apple ABI).
+;;; byte-off is a byte index from param0 (0 = first GPR save word).
+;;; Integer temps are :u64 like set-c-arg; strb/strh/W-str take the low bits.
+;;; Callers must pass a naturally aligned offset for the store width.
+(define-arm64-vinsn set-c-arg-byte (()
+                                    ((argval :u64)
+                                     (byte-off :u16const)))
+  (strb (:w argval) (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-c-arg-halfword (()
+                                        ((argval :u64)
+                                         (byte-off :u16const)))
+  (strh (:w argval) (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-c-arg-fullword (()
+                                        ((argval :u64)
+                                         (byte-off :u16const)))
+  (str (:w argval) (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-c-arg-doubleword-bytes (()
+                                                ((argval :u64)
+                                                 (byte-off :u16const)))
+  (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-single-c-arg-bytes (()
+                                            ((argval :single-float)
+                                             (byte-off :u16const)))
+  (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-double-c-arg-bytes (()
+                                            ((argval :double-float)
+                                             (byte-off :u16const)))
+  (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
 (define-arm64-vinsn reload-single-c-arg (((argval :single-float))
                                          ((argnum :u16const)))
   (ldr argval (:@ sp (:$ (:apply + arm64::c-frame.param0
