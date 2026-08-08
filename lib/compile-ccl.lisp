@@ -663,7 +663,13 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
           (setf (fdefinition '%allocate-code-vector) #'heap-alloc))
         (setf (fdefinition '%darwinarm64-jit-install-code) #'heap-install)
         (unwind-protect
-             (load "ccl:compiler;ARM64;arm64-lap.lisp")
+             (progn
+               ;; Drop any MAP_JIT-tainted tip lap fasl from a prior attempt.
+               (dolist (f (list "ccl:bin;arm64-lap.da64fsl"
+                                "ccl:bin;arm64-lap.dx64fsl"))
+                 (let ((p (probe-file f)))
+                   (when p (delete-file p))))
+               (load "ccl:compiler;ARM64;arm64-lap.lisp"))
           (setf (svref *fasl-dispatch-table* 2) old-faslop)
           (when old-alloc
             (setf (fdefinition '%allocate-code-vector) old-alloc))
