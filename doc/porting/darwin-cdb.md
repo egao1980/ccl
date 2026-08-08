@@ -8,7 +8,7 @@
 |--------|--------|
 | **libc** | Regenerated arm64 (current MacOSX.sdk), includes **math.h** |
 | **cocoa** | Regenerated arm64 ObjC: Foundation + AppKit (+ objc runtime) |
-| **gl** | Populate tooling ready (C: OpenGL + GLU + GLUT; AGL skipped) |
+| **gl** | Regenerated arm64 (OpenGL + GLU + GLUT; AGL absent from SDK) |
 | **carbon** | Populate tooling ready (C: Carbon.h) |
 | **quartz** | Populate tooling ready (ObjC: Quartz.h umbrella) |
 | **quartzcore** | Populate tooling ready (ObjC: QuartzCore.h) |
@@ -98,3 +98,6 @@ Notes:
 * **AGL** is absent from modern SDKs; `gl-populate.sh` still lists it and
   `h-to-ffi.sh` skips missing headers.
 * Carbon is deprecated; populate passes `-Wno-deprecated-declarations`.
+* After arm64 gl regen, CDBs shrink vs x86 bring-up copies (those were
+  oversized shared dumps): empty objc tables (~4608 B), focused CGL/GLU/GLUT
+  constants/functions.
