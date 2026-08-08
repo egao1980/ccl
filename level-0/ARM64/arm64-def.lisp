@@ -684,13 +684,15 @@
 ;;; FP args: load d0-d7 from the 64-byte staging block unconditionally
 ;;; (unused slots are zeroed by the caller).
 ;;;
-;;; _SPffcall already discards the with-variable-c-frame allocation (same
-;;; PPC64 poweropen_ffcall / %%ff-result story).  Push a 16-byte dummy
-;;; {header-hole, savedsp} so the compiler's discard-c-frame undo balances.
+;;; _SPffcall discards the with-variable-c-frame allocation.  Re-establish
+;;; SP at FRAME (still intact above the restored SP) so discard-c-frame
+;;; can pop via savedsp — same idea as x86 re-linking tcr.foreign-sp.
 
-(defarm64lapfunction %do-ff-call ((result arg_x) (fp-regs arg_y) (entry arg_z))
-  (check-nargs 3)
-  (vpush result)
+(defarm64lapfunction %do-ff-call ((result 0) (frame arg_x) (fp-regs arg_y) (entry arg_z))
+  (check-nargs 4)
+  (ldr temp0 (:@ vsp (:$ 0)))           ; result macptr
+  (vpush frame)
+  (vpush temp0)
   (macptr-ptr imm0 fp-regs)
   (ldr d0 (:@ imm0 (:$ 0)))
   (ldr d1 (:@ imm0 (:$ 8)))
@@ -705,9 +707,8 @@
   (macptr-ptr imm1 temp0)
   (str imm0 (:@ imm1 (:$ 0)))
   (str d0 (:@ imm1 (:$ 8)))
-  (mov imm1 sp)
-  (sub sp sp (:$ 16))
-  (str imm1 (:@ sp (:$ arm64::c-frame.savedsp)))
+  (vpop temp0)                          ; frame (SP-as-fixnum)
+  (mov sp temp0)                        ; reclaim for discard-c-frame
   (mov arg_z rnil)
   (ret))
 
@@ -823,7 +824,7 @@
                               (setf (%get-ptr argptr other-offset) (%get-ptr val p))
                               (incf p 8)
                               (incf other-offset 8)))))))
-                   (%do-ff-call result-buf fp-args entry)
+                   (%do-ff-call result-buf frame fp-args entry)
                    (ecase result-spec
                      (:void nil)
                      (:address (%get-ptr result-buf 0))

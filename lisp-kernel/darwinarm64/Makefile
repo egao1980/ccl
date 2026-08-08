@@ -11,11 +11,10 @@ VPATH = ../
 RM = /bin/rm
 CC = cc
 ASFLAGS =
-# Eager dual-map default (impure boot / legacy biased code).  Pure-only
-# aliases + on-demand path are used when DARWIN_ARM64_DUAL_MAP=0:
-#   make CDEFINES_EXTRA=-DDARWIN_ARM64_DUAL_MAP=0
+# Production: dual-map off (purify RX + MAP_JIT). Legacy biased images:
+#   make CDEFINES_EXTRA=-DDARWIN_ARM64_DUAL_MAP=1
 CDEFINES = -DDARWIN -DARM64 -D_REENTRANT -D_DARWIN_C_SOURCE \
-	-DDARWIN_ARM64_DUAL_MAP=1 \
+	-DDARWIN_ARM64_DUAL_MAP=0 \
 	-DVC_REVISION=$(VC_REVISION) $(CDEFINES_EXTRA)
 CDEBUG = -g
 COPT = -O2

@@ -38,14 +38,13 @@ typedef ucontext_t ExceptionInformation;
  *     legacy biased call sites / impure heap code.
  *
  * DARWIN_ARM64_DUAL_MAP:
- *   1 (default) — eager mach_vm_remap on CommitMemory; NX handler only
- *     redirects PC += bias (no remap-in-handler — that livelocked).
- *   0 — no eager remap; fault handler creates aliases on demand with a
- *     retry cap.  Pure/readonly spans still get an explicit alias at
- *     image load / purify.  Re-enable: make CDEFINES_EXTRA=-DDARWIN_ARM64_DUAL_MAP=0
+ *   0 (default) — production: purify RX + MAP_JIT; on-demand RX alias
+ *     with retry cap for any remaining impure heap code.
+ *   1 — eager mach_vm_remap; NX handler redirects PC += bias.
+ *     make CDEFINES_EXTRA=-DDARWIN_ARM64_DUAL_MAP=1 for legacy biased images.
  */
 #ifndef DARWIN_ARM64_DUAL_MAP
-#define DARWIN_ARM64_DUAL_MAP 1
+#define DARWIN_ARM64_DUAL_MAP 0
 #endif
 #ifndef HEAP_EXEC_BIAS
 #define HEAP_EXEC_BIAS 0x004000000000ULL
