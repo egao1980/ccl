@@ -9,9 +9,9 @@
 | **libc** | Regenerated arm64 (current MacOSX.sdk), includes **math.h** |
 | **cocoa** | Regenerated arm64 ObjC: Foundation + AppKit (+ objc runtime) |
 | **gl** | Regenerated arm64 (OpenGL + GLU + GLUT; AGL absent from SDK) |
-| **carbon** | Populate tooling ready (C: Carbon.h) |
-| **quartz** | Populate tooling ready (ObjC: Quartz.h umbrella) |
-| **quartzcore** | Populate tooling ready (ObjC: QuartzCore.h) |
+| **carbon** | Regenerated arm64 (Carbon.h umbrella) |
+| **quartz** | Regenerated arm64 ObjC (Quartz.h umbrella) |
+| **quartzcore** | Regenerated arm64 ObjC (QuartzCore.h; ~340 objc-classes) |
 | other | Still x86 bring-up copies |
 
 Helpers: `tools/darwin-arm64-cdb/`. Needs
