@@ -2887,11 +2887,32 @@ argument lisp string."
   (>= #&kCFCoreFoundationVersionNumber 635.0d0))
 
 (defun tagged-objc-instance-p (p)
+  "Return a cache-key tag if P is an ObjC tagged pointer, else NIL.
+
+Apple's encoding differs by arch (objc4 objc-internal.h):
+  - x86_64 macOS: tag in low nibble, bit0 set (_OBJC_TAG_MASK = 1)
+  - arm64: MSB set (_OBJC_TAG_MASK = 1<<63); basic tag in low 3 bits,
+    value 7 selects an extended tag in the high bits.
+
+The old low-nibble-only test made arm64 tagged NSStrings
+(e.g. short literals from initWithUTF8String:) look untagged; we then
+safe-get-ptr'd the payload address (not a real isa) and recognize failed
+— the substringWithRange heisenbug."
   (when *objc-runtime-uses-tags*
-    (let* ((tag (logand (the natural (%ptr-to-int p)) #xf)))
-      (declare (fixnum tag))
-      (if (logbitp 0 tag)
-        tag))))
+    (let* ((raw (%ptr-to-int p)))
+      #+arm64-target
+      (when (logbitp 63 raw)
+        (let* ((basic (logand raw #x7)))
+          (declare (fixnum basic))
+          (if (eql basic 7)
+            ;; Extended tag — keep cache keys out of 0..6.
+            (logior #x100 (ldb (byte 8 55) raw))
+            basic)))
+      #-arm64-target
+      (let* ((tag (logand (the natural raw) #xf)))
+        (declare (fixnum tag))
+        (if (logbitp 0 tag)
+          tag)))))
 
 (defun %objc-instance-class-index (p)
   (unless (%null-ptr-p p)

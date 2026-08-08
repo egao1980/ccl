@@ -1,5 +1,7 @@
-;;;; Reload tip patches, then OBJC-SUPPORT + NSString / NSRange / varargs smoke.
+;;;; Reload tip patches, then OBJC-SUPPORT + NSString / NSRange smoke.
 ;;;; Poll this — CCL smokes hang or die quickly; do not block indefinitely.
+;;;;
+;;;; Short NSStrings are often Apple arm64 tagged pointers (MSB set).
 (in-package :ccl)
 (setq *warn-if-redefine-kernel* nil)
 
@@ -65,6 +67,18 @@
 (format t "~&objc-support loaded~%")
 (finish-output)
 
+;; Override image/fasl copy: arm64 tagged pointers use bit63, not x86 low nibble.
+(defun tagged-objc-instance-p (p)
+  (when *objc-runtime-uses-tags*
+    (let* ((raw (%ptr-to-int p)))
+      (when (logbitp 63 raw)
+        (let* ((basic (logand raw #x7)))
+          (declare (fixnum basic))
+          (if (eql basic 7)
+            (logior #x100 (ldb (byte 8 55) raw))
+            basic))))))
+(format t "~&tagged-ptr override ok~%")
+
 (let* ((s (%make-nsstring "darwinarm64"))
        (len (#/length s)))
   (format t "~&s=~s len=~s~%" s len)
@@ -76,13 +90,12 @@
        (r (ns:make-ns-range 1 3))
        (sub (#/substringWithRange: s r))
        (cstr (%get-cstring (#/UTF8String sub))))
-  (format t "~&substring=~s~%" cstr)
+  (format t "~&substring=~s (recv tagged=~s)~%"
+          cstr (not (null (tagged-objc-instance-p s))))
   (finish-output)
   (unless (equal cstr "bcd")
     (error "substringWithRange: => ~s" cstr)))
 
-;; Varargs (#/stringWithFormat:) still SIGSEGVs on arm64 — skip until
-;; Darwin AAPCS64 variadic send is fixed.  N-word/NSRange is the gate.
 (format t "~&format=SKIPPED (varargs pending)~%")
 (finish-output)
 
