@@ -304,3 +304,18 @@ The register and stack usage conventions for lisp code and external
 (or foreign) are completely different.  For arm64, the AAPCS64 document
 describes the standard ABI.  Apple platforms diverge from the
 standard ABI in a few places.  See https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms for information about that.
+
+### ANSI suite green (post NX-bias) — remaining flakes fixed
+
+* **`CCL.40055-3`**: test bug in ccl-tests — bare `require-type` read as
+  `CL-TEST::REQUIRE-TYPE`. Fixed with `ccl:require-type` (see egao1980/ccl-tests).
+* **`ENSURE-DIRECTORIES-EXIST.8`**: needs empty `scratch/`; `run-tests` now
+  `rm -rf scratch` after `make clean`.
+* **Intermittent SIGILL** (`Unhandled exception 4 … neither udf nor brk`) during
+  monolithic `:compile t` runs: `arm64-lap-generate-code` never called
+  `%make-code-executable` (ARM32/PPC/nfasload already did). Fresh codevectors
+  could hit a stale I-cache line on the RX dual-map alias. Fixed in
+  `compiler/ARM64/arm64-lap.lisp`. Also tear down RX alias in `UnCommitMemory`
+  before replacing the RW mapping (`lisp-kernel/memory.c`).
+* Verified: 6/6 consecutive full `run-tests` + ccl-specific group, 0 failures.
+

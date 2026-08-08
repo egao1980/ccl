@@ -242,6 +242,17 @@ UnCommitMemory (LogicalAddress start, natural len) {
   }
 #else
   if (len) {
+#if defined(DARWIN) && defined(ARM64)
+    /* Drop the RX dual-map alias before replacing the RW mapping.
+       mmap(MAP_FIXED) over the shared remap source can leave a stale
+       executable alias at VA+HEAP_EXEC_BIAS — biased br/blr then runs
+       ghost pages (SIGILL "neither udf nor brk" in long ANSI runs). */
+    if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
+      mach_vm_address_t rx =
+        (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
+      (void)mach_vm_deallocate(mach_task_self(), rx, (mach_vm_size_t)len);
+    }
+#endif
     madvise(start, len, MADV_DONTNEED);
     if (mmap(start, len, MEMPROTECT_NONE, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0)
 	!= start) {
@@ -346,6 +357,15 @@ ProtectMemory(LogicalAddress addr, natural nbytes)
     if (status == ENOMEM) {
       void *mapaddr = mmap(addr,nbytes, prot, MAP_ANON|MAP_PRIVATE|MAP_FIXED,-1,0);
       if (mapaddr != MAP_FAILED) {
+#if defined(DARWIN) && defined(ARM64)
+        /* mmap MAP_FIXED replaced the RW source of any RX alias — drop
+           the stale alias.  Guards use PROT_NONE so no RX remap needed. */
+        if ((natural)addr >= (natural)IMAGE_BASE_ADDRESS) {
+          mach_vm_address_t rx =
+            (mach_vm_address_t)((natural)addr + HEAP_EXEC_BIAS);
+          (void)mach_vm_deallocate(mach_task_self(), rx, (mach_vm_size_t)nbytes);
+        }
+#endif
         return 0;
       }
     }
