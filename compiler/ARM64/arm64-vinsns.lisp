@@ -6170,18 +6170,15 @@
 ;;; PPC64 LINE-PORT (ppc64-vinsns.lisp:3398): (mr dest ppc::sp) -- the
 ;;; control-stack pointer AS a node value (frames are 16-aligned, so
 ;;; under fixnumshift=3 the raw SP is a valid boxed fixnum, same pun as
-;;; PPC).  A64: reg 31 in an add-immediate Rn slot IS SP (the alias of
-;;; `mov Xd, SP`); bare `sp` is this lane's gate-proven operand spelling
-;;; for it (w4:443 / w10:558 build-lisp-frame bases).  May DUPLICATE a
-;;; definition in Matt's arm64-vinsns.lisp (unverifiable locally) --
-;;; by-name redefinition is benign; drop this one if his tree has it.
-(define-arm64-vinsn %current-frame-ptr (((dest :imm))
+;;; PPC).  Dest must be :lisp (not :imm) — ALLOCATE-TEMPORARY-VREG on
+;;; arm64 rejects :imm as a result mode.
+(define-arm64-vinsn %current-frame-ptr (((dest :lisp))
                                         ())
   (add dest sp (:$ 0)))
 
 ;;; ARM64 C frames live on the Lisp SP (alloc-c-frame), unlike x86's
 ;;; separate tcr.foreign-sp.  %foreign-stack-pointer is therefore SP.
-(define-arm64-vinsn %foreign-stack-pointer (((dest :imm))
+(define-arm64-vinsn %foreign-stack-pointer (((dest :lisp))
                                             ())
   (add dest sp (:$ 0)))
 
