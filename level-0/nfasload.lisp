@@ -687,21 +687,17 @@
 (deffaslop $fasl-code-vector (s)
   (let* ((element-count (%fasl-read-count s))
          (size-in-bytes (* 4 element-count))
-         ;; Darwin/arm64: dynamic heap is RW-only (W^X).  Fasl-loaded code
-         ;; must live in MAP_JIT like LAP (%allocate-code-vector); otherwise
-         ;; every entry NX-faults into on-demand RX-alias redirect and the
-         ;; livelock cap trips during (require …).  Other targets keep
-         ;; heap-allocated code-vectors (RWX or equivalent).
-         (vector
-          #+(and darwinarm64-target)
-          (%allocate-code-vector element-count)
-          #-(and darwinarm64-target)
-          (allocate-typed-vector :code-vector element-count)))
+         ;; Heap-allocated code-vector.  Darwin/arm64 dynamic heap is RW-only
+         ;; (W^X); execution uses on-demand RX aliases at +HEAP_EXEC_BIAS
+         ;; (see arm64-exceptions.c) until purify moves code to RX pure space.
+         ;; Do NOT use MAP_JIT here: pthread_jit_write_protect_np is
+         ;; process-global, so (%jit-wp nil) around the fasl byte copy makes
+         ;; every already-loaded JIT code-vector non-executable (cold-load
+         ;; write faults).  LAP/runtime compile uses %allocate-code-vector.
+         (vector (allocate-typed-vector :code-vector element-count)))
     (declare (fixnum element-count size-in-bytes))
     (%epushval s vector)
-    #+(and darwinarm64-target) (%jit-wp nil)
     (%fasl-read-n-bytes s vector 0 size-in-bytes)
-    #+(and darwinarm64-target) (%jit-wp t)
     (%make-code-executable vector)
     vector))
 

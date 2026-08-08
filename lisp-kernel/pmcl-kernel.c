@@ -2278,13 +2278,24 @@ xMakeDataExecutable(BytePtr start, natural nbytes)
   if (nbytes) {
     sys_icache_invalidate(start, nbytes);
 #if defined(ARM64)
-    /* Dual-map RX alias only exists when DARWIN_ARM64_DUAL_MAP; invalidating
-       the bias band without a mapping SIGBUS/EXC_BAD_ACCESS (Apple ic ivau). */
-#if DARWIN_ARM64_DUAL_MAP
+    /* Eager on-demand RX alias for impure heap code (DM=0).  Without this,
+       the first fetch NX-faults into the exception remap path; remapping
+       here keeps icache coherent on the executable view.  DM=1 already
+       has eager aliases from CommitMemory. */
     if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
+#if DARWIN_ARM64_DUAL_MAP
       sys_icache_invalidate(start + HEAP_EXEC_BIAS, nbytes);
-    }
+#else
+      {
+        natural page = (natural)1 << log2_page_size;
+        natural base = ((natural)start) & ~(page - 1);
+        natural end = ((natural)start + nbytes + page - 1) & ~(page - 1);
+        if (darwin_arm64_remap_exec_alias((LogicalAddress)base, end - base)) {
+          sys_icache_invalidate(start + HEAP_EXEC_BIAS, nbytes);
+        }
+      }
 #endif
+    }
 #endif
   }
 #else
