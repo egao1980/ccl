@@ -674,28 +674,58 @@
 ;;; =====================================================================
 ;;; Interpreted %ff-call (AAPCS64) — REPL / uncompiled #_ path
 ;;; =====================================================================
-;;; Compiled ff-call uses aapcs64-ff-call + .SPffcall.  This is the
-;;; dynamic-extent / &rest twin (cf. level-0/X86/x86-def.lisp).
+;;; Compiled ff-call uses aapcs64-ff-call + .SPffcall (alloc-c-frame; the
+;;; compiler resets *arm642-cstack* after SPffcall pops the frame — no
+;;; discard-c-frame undo).
 ;;;
-;;; _SPffcall leaves the GPR result in imm0 (=x0) and FP in d0, then
-;;; clears arg_* node regs.  We therefore park RESULT (macptr) on the
-;;; vstack across the call and store imm0@0 / d0@8 afterward.
+;;; Do NOT use with-variable-c-frame here: its discard-c-frame undo races
+;;; with _SPffcall's SP restore and breaks nested callers (call-check-regs
+;;; / cheap-eval / any extra lisp frame).  Mirror %make-code-executable:
+;;; save-lisp-context, build the c_frame, .SPffcall, restore-full-lisp-context.
 ;;;
-;;; FP args: load d0-d7 from the 64-byte staging block unconditionally
-;;; (unused slots are zeroed by the caller).
-;;;
-;;; _SPffcall already discards the with-variable-c-frame allocation.
-;;; Re-establish SP at FRAME (c_frame still intact above the restored SP
-;;; for the no-overflow case) so discard-c-frame can pop via savedsp —
-;;; same idea as x86 %do-ff-call re-linking tcr.foreign-sp.  RESULT is a
-;;; stack argument: load then drop it before the linked subprim call.
+;;; ARGBUF layout: fixnum nwords at offset 0, then nwords param words
+;;; (GPR0-7 + overflow) at offset 8.  FP regs from the 64-byte FP-ARGS
+;;; block.  RESULT receives imm0@0 / d0@8.
 
-(defarm64lapfunction %do-ff-call ((result 0) (frame arg_x) (fp-regs arg_y) (entry arg_z))
+(defarm64lapfunction %do-ff-call ((result 0) (argbuf arg_x) (fp-regs arg_y) (entry arg_z))
   (check-nargs 4)
   (ldr temp0 (:@ vsp (:$ 0)))           ; result macptr
-  (add vsp vsp (:$ arm64::node-size))   ; pop stack arg
-  (vpush frame)
-  (vpush temp0)
+  (add vsp vsp (:$ 8))
+  (save-lisp-context)
+  (vpush temp0)                         ; result
+  (vpush argbuf)
+  (vpush fp-regs)
+  (vpush entry)
+  ;; vsp: [result][argbuf][fp-regs][entry]
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))          ; nwords (fixnum)
+  (add imm2 temp1 (:$ '6))
+  (add imm2 imm2 (:$ (1- arm64::dnode-size)))
+  (and imm2 imm2 (:$ (- arm64::dnode-size)))
+  (sub imm0 imm2 (:$ '1))
+  (lsl imm0 imm0 (:$ (- arm64::num-subtag-bits arm64::fixnumshift)))
+  (add imm0 imm0 (:$ arm64::subtag-u64-vector))
+  (mov imm1 sp)
+  (sub sp sp imm2)
+  (stp imm0 imm1 (:@ sp (:$ 0)))
+  ;; Copy nwords params from argbuf+8 into c_frame.params.
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 sp (:$ arm64::c-frame.param0))
+  @copy
+  (cbz temp1 @copydone)
+  (ldr temp0 (:@ imm0 (:$ 0)))
+  (str temp0 (:@ imm1 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 imm1 (:$ 8))
+  (sub temp1 temp1 (:$ '1))
+  (b @copy)
+  @copydone
+  (ldr fp-regs (:@ vsp (:$ 8)))
+  (ldr entry (:@ vsp (:$ 0)))
   (macptr-ptr imm0 fp-regs)
   (ldr d0 (:@ imm0 (:$ 0)))
   (ldr d1 (:@ imm0 (:$ 8)))
@@ -706,14 +736,14 @@
   (ldr d6 (:@ imm0 (:$ 48)))
   (ldr d7 (:@ imm0 (:$ 56)))
   (call-subprim .SPffcall)
-  (vpop temp0)                          ; result macptr
+  (ldr temp0 (:@ vsp (:$ 24)))          ; result
   (macptr-ptr imm1 temp0)
   (str imm0 (:@ imm1 (:$ 0)))
   (str d0 (:@ imm1 (:$ 8)))
-  (vpop temp0)                          ; frame (SP-as-fixnum)
-  (mov sp temp0)                        ; reclaim for discard-c-frame
   (mov arg_z rnil)
+  (restore-full-lisp-context)
   (ret))
+
 (defun %ff-call (entry &rest specs-and-vals)
   (declare (dynamic-extent specs-and-vals))
   (let* ((len (length specs-and-vals))
@@ -731,8 +761,6 @@
                    :signed-halfword :unsigned-halfword
                    :signed-byte :unsigned-byte
                    :void)
-         ;; Pass 1: only overflow words need extra c_frame slots beyond
-         ;; the mandatory 8-word GPR save area that _SPffcall loads.
          (do* ((i 0 (1+ i))
                (specs specs-and-vals (cddr specs))
                (spec (car specs) (car specs)))
@@ -758,85 +786,86 @@
          (let ((total-words (+ 8 overflow-words)))
            (declare (fixnum total-words))
            (%stack-block ((fp-args (* 8 8))
-                          (result-buf 16))
+                          (result-buf 16)
+                          (argbuf (* 8 (1+ total-words))))
              (dotimes (i 64) (setf (%get-unsigned-byte fp-args i) 0))
-             (with-macptrs ((argptr))
-               (with-variable-c-frame
-                   total-words frame
-                   (%setf-macptr-to-object argptr frame)
-                   (let* ((gpr-offset 16)
-                          (other-offset (+ gpr-offset (* 8 8))))
-                     (declare (fixnum gpr-offset other-offset))
-                     (setq n-fp-args 0 n-gpr-args 0)
-                     (do* ((i 0 (1+ i))
-                           (specs specs-and-vals (cddr specs))
-                           (spec (car specs) (car specs))
-                           (val (cadr specs) (cadr specs)))
-                          ((= i nargs))
-                       (declare (fixnum i))
-                       (case spec
-                         (:variadic)
-                         (:address
-                          (incf n-gpr-args)
-                          (cond ((<= n-gpr-args 8)
-                                 (setf (%get-ptr argptr gpr-offset) val)
-                                 (incf gpr-offset 8))
-                                (t
-                                 (setf (%get-ptr argptr other-offset) val)
-                                 (incf other-offset 8))))
-                         ((:signed-doubleword :signed-fullword :signed-halfword
-                                              :signed-byte)
-                          (incf n-gpr-args)
-                          (cond ((<= n-gpr-args 8)
-                                 (setf (%%get-signed-longlong argptr gpr-offset) val)
-                                 (incf gpr-offset 8))
-                                (t
-                                 (setf (%%get-signed-longlong argptr other-offset) val)
-                                 (incf other-offset 8))))
-                         ((:unsigned-doubleword :unsigned-fullword :unsigned-halfword
-                                                :unsigned-byte)
-                          (incf n-gpr-args)
-                          (cond ((<= n-gpr-args 8)
-                                 (setf (%%get-unsigned-longlong argptr gpr-offset) val)
-                                 (incf gpr-offset 8))
-                                (t
-                                 (setf (%%get-unsigned-longlong argptr other-offset) val)
-                                 (incf other-offset 8))))
-                         (:double-float
-                          (cond ((< n-fp-args 8)
-                                 (setf (%get-double-float fp-args (* n-fp-args 8)) val)
-                                 (incf n-fp-args))
-                                (t
-                                 (setf (%get-double-float argptr other-offset) val)
-                                 (incf other-offset 8)
-                                 (incf n-fp-args))))
-                         (:single-float
-                          (cond ((< n-fp-args 8)
-                                 (setf (%get-single-float fp-args (* n-fp-args 8)) val)
-                                 (incf n-fp-args))
-                                (t
-                                 (setf (%get-single-float argptr other-offset) val)
-                                 (incf other-offset 8)
-                                 (incf n-fp-args))))
-                         (:registers)
-                         (t
-                          (let* ((p 0))
-                            (declare (fixnum p))
-                            (dotimes (i (the fixnum spec))
-                              (setf (%get-ptr argptr other-offset) (%get-ptr val p))
-                              (incf p 8)
-                              (incf other-offset 8)))))))
-                   (%do-ff-call result-buf frame fp-args entry)
-                   (ecase result-spec
-                     (:void nil)
-                     (:address (%get-ptr result-buf 0))
-                     (:unsigned-byte (%get-unsigned-byte result-buf 0))
-                     (:signed-byte (%get-signed-byte result-buf 0))
-                     (:unsigned-halfword (%get-unsigned-word result-buf 0))
-                     (:signed-halfword (%get-signed-word result-buf 0))
-                     (:unsigned-fullword (%get-unsigned-long result-buf 0))
-                     (:signed-fullword (%get-signed-long result-buf 0))
-                     (:unsigned-doubleword (%get-natural result-buf 0))
-                     (:signed-doubleword (%get-signed-natural result-buf 0))
-                     (:single-float (%get-single-float result-buf 8))
-                     (:double-float (%get-double-float result-buf 8))))))))))))
+             (dotimes (i (* 8 (1+ total-words)))
+               (setf (%get-unsigned-byte argbuf i) 0))
+             ;; Word 0 = fixnum nwords; params at offset 8.
+             (%set-object argbuf 0 total-words)
+             (let* ((gpr-offset 8)
+                    (other-offset (+ 8 (* 8 8))))
+               (declare (fixnum gpr-offset other-offset))
+               (setq n-fp-args 0 n-gpr-args 0)
+               (do* ((i 0 (1+ i))
+                     (specs specs-and-vals (cddr specs))
+                     (spec (car specs) (car specs))
+                     (val (cadr specs) (cadr specs)))
+                    ((= i nargs))
+                 (declare (fixnum i))
+                 (case spec
+                   (:variadic)
+                   (:address
+                    (incf n-gpr-args)
+                    (cond ((<= n-gpr-args 8)
+                           (setf (%get-ptr argbuf gpr-offset) val)
+                           (incf gpr-offset 8))
+                          (t
+                           (setf (%get-ptr argbuf other-offset) val)
+                           (incf other-offset 8))))
+                   ((:signed-doubleword :signed-fullword :signed-halfword
+                                        :signed-byte)
+                    (incf n-gpr-args)
+                    (cond ((<= n-gpr-args 8)
+                           (setf (%%get-signed-longlong argbuf gpr-offset) val)
+                           (incf gpr-offset 8))
+                          (t
+                           (setf (%%get-signed-longlong argbuf other-offset) val)
+                           (incf other-offset 8))))
+                   ((:unsigned-doubleword :unsigned-fullword :unsigned-halfword
+                                          :unsigned-byte)
+                    (incf n-gpr-args)
+                    (cond ((<= n-gpr-args 8)
+                           (setf (%%get-unsigned-longlong argbuf gpr-offset) val)
+                           (incf gpr-offset 8))
+                          (t
+                           (setf (%%get-unsigned-longlong argbuf other-offset) val)
+                           (incf other-offset 8))))
+                   (:double-float
+                    (cond ((< n-fp-args 8)
+                           (setf (%get-double-float fp-args (* n-fp-args 8)) val)
+                           (incf n-fp-args))
+                          (t
+                           (setf (%get-double-float argbuf other-offset) val)
+                           (incf other-offset 8)
+                           (incf n-fp-args))))
+                   (:single-float
+                    (cond ((< n-fp-args 8)
+                           (setf (%get-single-float fp-args (* n-fp-args 8)) val)
+                           (incf n-fp-args))
+                          (t
+                           (setf (%get-single-float argbuf other-offset) val)
+                           (incf other-offset 8)
+                           (incf n-fp-args))))
+                   (:registers)
+                   (t
+                    (let* ((p 0))
+                      (declare (fixnum p))
+                      (dotimes (i (the fixnum spec))
+                        (setf (%get-ptr argbuf other-offset) (%get-ptr val p))
+                        (incf p 8)
+                        (incf other-offset 8))))))
+               (%do-ff-call result-buf argbuf fp-args entry)
+               (ecase result-spec
+                 (:void nil)
+                 (:address (%get-ptr result-buf 0))
+                 (:unsigned-byte (%get-unsigned-byte result-buf 0))
+                 (:signed-byte (%get-signed-byte result-buf 0))
+                 (:unsigned-halfword (%get-unsigned-word result-buf 0))
+                 (:signed-halfword (%get-signed-word result-buf 0))
+                 (:unsigned-fullword (%get-unsigned-long result-buf 0))
+                 (:signed-fullword (%get-signed-long result-buf 0))
+                 (:unsigned-doubleword (%get-natural result-buf 0))
+                 (:signed-doubleword (%get-signed-natural result-buf 0))
+                 (:single-float (%get-single-float result-buf 8))
+                 (:double-float (%get-double-float result-buf 8)))))))))))
