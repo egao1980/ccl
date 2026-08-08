@@ -9,27 +9,47 @@ Scripts live here because `*headers*` / `darwin-arm64-headers/` are
 * Current MacOSX.sdk (`xcrun --show-sdk-path`)
 * Writable `ccl/darwin-arm64-headers/libc/`
 
-## libc core (recommended first slice)
+## Full libc populate (preferred)
 
 ```sh
+# BACK UP bring-up / previous CDB
+mkdir -p /tmp/libc-cdb-backup
+cp $CCL/darwin-arm64-headers/libc/*.cdb /tmp/libc-cdb-backup/
+
 cd $CCL/darwin-arm64-headers/libc/C
-$CCL/tools/darwin-arm64-cdb/libc-core-populate.sh
-# → .ffi under ./Library/... or ./usr/...
+$CCL/tools/darwin-arm64-cdb/libc-populate.sh
+# → ~324 .ffi (skips ~60 missing SDK headers; skips math.h — see below)
 
 cd $CCL
-./darm64cl --no-init --batch < tools/darwin-arm64-cdb/parse-libc.lisp
-# → darwin-arm64-headers/libc/new-*.cdb
-
-$CCL/tools/darwin-arm64-cdb/install-new-cdb.sh \
-  $CCL/darwin-arm64-headers/libc
+./darm64cl --stack-size 16M --thread-stack-size 16M --no-init --batch \
+  < tools/darwin-arm64-cdb/parse-libc.lisp
+# parse may SIGSEGV on quit after success; check PARSE-LIBC-OK in the log
 ```
 
-Layout probe after install: `tools/darwin-cdb-stat-smoke.lisp`.
+`math.h` is skipped: Apple’s `math.ffi` overflows the FFI reader control
+stack even with large `--stack-size`.
 
-Full Cocoa / historical header lists still need a curated port of the
-x86 `populate.sh` (many 10.11 paths are gone). See `doc/porting/darwin-cdb.md`.
+Aug 2026 arm64 regen vs x86-copy bring-up (key counts):
 
-**Important:** `parse-standard-ffi-files` calls `install-new-db-files`,
-which replaces `*.cdb` in place (old → `*.cdb-BAK`). A core-only
-populate therefore **shrinks** the libc database — back up first and
-restore the bring-up copy until coverage is complete.
+| DB | x86-copy | arm64 regen |
+|----|----------|-------------|
+| functions | 4989 | **5169** |
+| records | 5233 | 1662 (openssl/etc. gone; critical layouts match C) |
+| constants | 13781 | **15814** |
+| types | 2272 | **2511** |
+| vars | 221 | **237** |
+| `:stat` | 144 | 144 (= `sizeof`) |
+
+Layout smoke: `tools/darwin-cdb-stat-smoke.lisp`.
+
+## libc core (small slice — do not install over bring-up)
+
+`libc-core-populate.sh` is for pipeline smoke only. A core-only parse
+**replaces** the whole libc CDB set — restore from backup afterward.
+
+## Notes
+
+* `parse-standard-ffi-files` → `install-new-db-files` overwrites `*.cdb`
+  in place (old → `*.cdb-BAK`).
+* Full Cocoa / other modules: grow sibling `*-populate.sh` scripts here.
+* See `doc/porting/darwin-cdb.md`.

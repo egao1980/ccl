@@ -53,4 +53,8 @@ output_file="`basename "$header" .h`.ffi"
 output_path="$output_dir/$output_file"
 echo "$header"
 # shellcheck disable=SC2086
-"$FFIGEN" $CFLAGS $other_flags -x c $includes "$header" -o "$output_path"
+if ! "$FFIGEN" $CFLAGS $other_flags -x c $includes "$header" -o "$output_path"; then
+  echo "WARN: ffigen failed: $header" >&2
+  rm -f "$output_path"
+  exit 0
+fi

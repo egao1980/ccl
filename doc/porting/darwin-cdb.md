@@ -6,45 +6,40 @@
 (`compiler/ARM64/arm64-backend.lisp`).  Like every `*headers*` /
 `*headers64*` tree it is **gitignored**.
 
-Bring-up currently uses a **byte-copy of `darwin-x86-headers64`**.  That
-is enough for fixed-arity kernel-import / cold-load `#_` names.  It is
-**not** an arm64-translated database — regenerate before relying on
-arch-sensitive struct layouts or Cocoa.
+**libc** was regenerated Aug 2026 from the current MacOSX.sdk via
+`tools/darwin-arm64-cdb/libc-populate.sh` + `parse-libc.lisp`
+(`-arch arm64`).  Critical record layouts (`stat`, sockets, `dirent`,
+`rusage`, …) match `sizeof`.  Other modules (Cocoa, …) may still be
+the x86-64 bring-up copy until their populate scripts land.
 
-`struct stat` happens to match (`sizeof` 144) on the x86 copy vs Apple
-Silicon today — do not generalize from that.
+Helpers: `tools/darwin-arm64-cdb/`.  Needs
+[Clozure/ccl-ffigen](https://github.com/Clozure/ccl-ffigen) (workspace:
+`ccl-ffigen/`).
 
-Full regeneration needs [Clozure/ccl-ffigen](https://github.com/Clozure/ccl-ffigen)
-(workspace checkout: `ccl-ffigen/`).  Helpers: `tools/darwin-arm64-cdb/`.
-
-## Regenerate libc core (worked Aug 2026)
+## Regenerate libc
 
 ```sh
-# 1. ffigen5 already built with Makefile.darwin + include/clang-c
-cd $CCL/darwin-arm64-headers/libc/C
-$CCL/tools/darwin-arm64-cdb/libc-core-populate.sh   # -arch arm64, current SDK
+mkdir -p /tmp/libc-cdb-backup
+cp $CCL/darwin-arm64-headers/libc/*.cdb /tmp/libc-cdb-backup/
 
-# 2. parse → install-new-db-files overwrites *.cdb in place (keeps *.cdb-BAK)
+cd $CCL/darwin-arm64-headers/libc/C
+$CCL/tools/darwin-arm64-cdb/libc-populate.sh
+
 cd $CCL
-# BACK UP first — core-only parse replaces the WHOLE libc CDB set
-cp -R darwin-arm64-headers/libc/*.cdb /tmp/libc-cdb-backup/
-./darm64cl --no-init --batch < tools/darwin-arm64-cdb/parse-libc.lisp
+./darm64cl --stack-size 16M --thread-stack-size 16M --no-init --batch \
+  < tools/darwin-arm64-cdb/parse-libc.lisp
+# Expect PARSE-LIBC-OK; quit may SIGSEGV after install — check *.cdb mtimes
 ```
 
-**Do not leave a core-only CDB installed** over the bring-up x86 copy
-unless you accept losing most `#_` entries.  Restore from backup after
-validating the pipeline; expand `libc-core-populate.sh` until coverage
-matches need, then install for real.
+* ~84% of the historical x86 `populate.sh` headers still exist; missing
+  are mostly openssl/sql/odbc (`h-to-ffi.sh` skips them).
+* **`math.h` skipped** — `math.ffi` stack-overflows the FFI reader.
+* Do **not** install `libc-core-populate.sh` output over a full CDB.
 
 Layout smoke: `tools/darwin-cdb-stat-smoke.lisp`.
 
-`ccl-ffigen/arm64-headers/` today is **Linux** aarch64, not Darwin.
-Variadic markers (`:void` → `:variadic` sentinel) already work with the
-x86-copy CDBs for `printf` / `snprintf`.
+## Other modules / Cocoa
 
-## Full Cocoa / historical lists
-
-Port `darwin-x86-headers64/*/C/populate.sh` carefully — many 10.11 SDK
-paths are gone.  Prefer growing `libc-core-populate.sh` and sibling
-module scripts under `tools/darwin-arm64-cdb/` rather than committing
-into the gitignored headers tree.
+Port `darwin-x86-headers64/*/C/populate.sh` the same way (`-arch arm64`,
+current SDK).  Prefer scripts under `tools/darwin-arm64-cdb/` (versioned)
+over the gitignored headers tree.

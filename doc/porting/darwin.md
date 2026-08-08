@@ -197,10 +197,10 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
 
 * Backend expects `ccl:darwin-arm64-headers;`.  The tree is **gitignored**
   (`/*headers/`) like every other `*headers*` directory.
-* Bring-up copy is a **byte-identical clone of `darwin-x86-headers64`**.
-  `tools/darwin-arm64-cdb/` + ffigen5 can regenerate a libc **core**
-  (`-arch arm64`, current SDK); do not install core-only over the full
-  bring-up CDB.  See `doc/porting/darwin-cdb.md`.
+* **libc** regenerated for arm64 (`tools/darwin-arm64-cdb/libc-populate.sh`,
+  current MacOSX.sdk, `-arch arm64`).  Critical layouts match C
+  `sizeof`.  Cocoa / other modules may still be the x86 bring-up copy.
+  See `doc/porting/darwin-cdb.md`.
 
 ### Apple AAPCS64 FFI
 
