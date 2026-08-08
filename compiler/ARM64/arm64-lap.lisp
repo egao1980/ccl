@@ -102,9 +102,15 @@
     (declare (fixnum i constants-size))
     (let* ((code-vector
             (cond
-              ;; Native Darwin/arm64: MAP_JIT code heap (no HEAP_EXEC_BIAS).
+              ;; Native Darwin/arm64 interactive compile: MAP_JIT (canonical VA).
+              ;; compile-file must use the heap — MAP_JIT uvectors are outside
+              ;; the lisp heap (printer: BOGUS) and do not survive fasl dump,
+              ;; which produced broken native arm64-boot.image / empty fasls.
               #+(and darwinarm64-target)
-              ((not cross-compiling)
+              ((and (not cross-compiling)
+                    (not *compiling-file*)
+                    (boundp '*darwinarm64-map-jit-fasls*)
+                    *darwinarm64-map-jit-fasls*)
                (%allocate-code-vector (+ code-vector-size prefix-size)))
               (t
                (%alloc-misc
@@ -113,8 +119,14 @@
                   target::subtag-xcode-vector
                   arm64::subtag-code-vector)))))
            #+darwinarm64-target
+           (use-jit-blit
+            (and (not cross-compiling)
+                 (not *compiling-file*)
+                 (boundp '*darwinarm64-map-jit-fasls*)
+                 *darwinarm64-map-jit-fasls*))
+           #+darwinarm64-target
            (scratch
-            (unless cross-compiling
+            (when use-jit-blit
               ;; Assemble into a heap code-vector (RW), then C-blit into
               ;; MAP_JIT.  Never hold pthread_jit_write_protect_np(0)
               ;; across lisp — that makes already-loaded JIT fasls NX.
@@ -129,7 +141,7 @@
           (setf (uvref fill-target i) (arm64::instruction-word insn))
           (incf i)))
       #+darwinarm64-target
-      (unless cross-compiling
+      (when use-jit-blit
         (%darwinarm64-jit-install-code
          code-vector scratch
          (ash (+ code-vector-size prefix-size) 2)))
@@ -140,10 +152,13 @@
       (setf (uvref constants-vector (1- constants-size)) lfbits
             (uvref constants-vector 0) code-vector)
       ;; Match ARM32/PPC: flush I/D cache before execution.
-      ;; Darwin/arm64 MAP_JIT path already icaches in jit_install_code.
+      ;; Darwin/arm64 MAP_JIT blit path already icaches in jit_install_code.
       (unless cross-compiling
         #-darwinarm64-target
-        (%make-code-executable code-vector))
+        (%make-code-executable code-vector)
+        #+darwinarm64-target
+        (unless use-jit-blit
+          (%make-code-executable code-vector)))
       ;; %alloc-misc returns a misc-tagged vector; hand the resident
       ;; (non-cross) path to function-vector-to-function so both ends name
       ;; the conversion, as $fasl-clfun does.  NOT a retag on arm64: since
