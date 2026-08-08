@@ -438,12 +438,12 @@
                                 (result-coerce #'null-coerce-foreign-result))
   "Shared AAPCS64 ff-call expander (Linux + Darwin).
 Darwin variadic-on-stack is enforced in aapcs64-ff-call when a
-`:variadic` sentinel (from `%external-call-expander` at the CDB
-`:void` boundary) appears in the arg list.
+:variadic sentinel (from %external-call-expander at the CDB
+:void boundary) appears in the arg list.
 
-Records of ≤128 bits are expanded to N `:unsigned-doubleword`
-`%%get-unsigned-longlong` loads (same shape as x8664 integer-in-GPR
-records).  That path uses the proven getu64/`set-c-arg` codegen;
+Records of <=128 bits become N :unsigned-doubleword
+%%get-unsigned-longlong loads (same shape as CCL x8664 integer-in-GPR
+records).  That path uses the proven getu64/set-c-arg codegen;
 passing a bare macptr as an N-word argspec was a heisenbug on Darwin
 arm64 (stable-wrong return across a process, flaky across ASLR)."
   (let* ((result-type-spec (or (car (last args)) :void))
@@ -480,7 +480,7 @@ arm64 (stable-wrong return across a process, flaky across ASLR)."
                            (argforms :unsigned-doubleword)
                            (argforms `(%%get-unsigned-longlong ,arg-value-form 0)))
                           ((<= bits 128)
-                           ;; Homogeneous integer record in GPRs (e.g. NSRange).
+                           ;; Integer-ish record in GPRs (e.g. NSRange).
                            ;; Bind once so multi-word loads share the same macptr.
                            (unless structure-arg-temp
                              (setq structure-arg-temp (gensym)))
@@ -506,8 +506,7 @@ arm64 (stable-wrong return across a process, flaky across ASLR)."
                (declare (dynamic-extent ,structure-arg-temp)
                         (type macptr ,structure-arg-temp))
                ,call)
-            call)))))))
-
+            call))))))
 ;;; A resident (native) arm64 compiler is DEMAND-LOADED module by module,
 ;;; not dumped into the image the way the ppc/x86 ones are, so nothing pulls
 ;;; NXENV before nx1 needs it and the first (defun ...) dies on an undefined
