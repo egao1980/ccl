@@ -2278,9 +2278,13 @@ xMakeDataExecutable(BytePtr start, natural nbytes)
   if (nbytes) {
     sys_icache_invalidate(start, nbytes);
 #if defined(ARM64)
+    /* Dual-map RX alias only exists when DARWIN_ARM64_DUAL_MAP; invalidating
+       the bias band without a mapping SIGBUS/EXC_BAD_ACCESS (Apple ic ivau). */
+#if DARWIN_ARM64_DUAL_MAP
     if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
       sys_icache_invalidate(start + HEAP_EXEC_BIAS, nbytes);
     }
+#endif
 #endif
   }
 #else
