@@ -407,12 +407,18 @@
 #+darwin-target
 ;;; Nuke any command-line arguments, to keep the Cocoa runtime from
 ;;; trying to process them.
+;;;
+;;; NXArgv is char**; element type must be (:* (:* :char)) (or :address),
+;;; NOT (:* :char).  The latter makes PAREF index bytes — SETF then smashes
+;;; argv[0] mid-pointer.  On darwinarm64 that corruption shows up as an
+;;; intermittent os_unfair_lock_lock SIGSEGV inside Cocoa dlopen
+;;; (fault addr often cs_area.high+0x4c10).
 (let* ((argv (foreign-symbol-address "NXArgv"))
        (argc (foreign-symbol-address "NXArgc")))
   (when argc
     (setf (pref argc :int) 1))
   (when argv
-    (setf (paref (%get-ptr argv) (:* :char) 1) +null-ptr+)))
+    (setf (paref (%get-ptr argv) (:* (:* :char)) 1) (%null-ptr))))
 
 #-cocotron
 (load-cocoa-framework)

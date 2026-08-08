@@ -25,8 +25,12 @@
 * **Bare `(require "OBJC-SUPPORT")` SIGSEGVs** on stale image; tip reload of
   `%ff-call` / `expand-ff-call` / expander / `aapcs64-ff-call` first → ~OK.
   Integrate via full unbiased rebuild (do not mid-session `save-application`).
-  Still open: bake tip into image; Darwin variadic send; require residual
-  flake; Protocol CDB inject.
+* **Require residual flake fixed:** NXArgv clear used
+  `(paref … (:* :char) 1)` — byte index, smashes `argv[0]`. Symptom:
+  intermittent `os_unfair_lock_lock` SIGSEGV in Cocoa `dlopen`
+  (fault ≈ `cs_area.high+0x4c10`). Fix: `(:* (:* :char))` like `jni.lisp`.
+  Still open: Darwin variadic send; Protocol CDB inject; arm64 `%throw` /
+  `objc-propagate-throw` parity (warnings only on success path).
 
 ## August 2026 — Darwin/arm64 boot image (egao1980)
 
