@@ -266,7 +266,8 @@
 
 (defvar *arm64-backend* (car *known-arm64-backends*))
 
-;;; Vinsn predicate: Darwin/arm64 RX dual-map (HEAP_EXEC_BIAS).
+;;; Vinsn predicate: Darwin/arm64 RX dual-map (HEAP_EXEC_BIAS) for
+;;; IMAGE_BASE heap code only; MAP_JIT uses plain br/blr.
 (defun darwinarm64-heap-exec-bias-p ()
   (and *target-backend*
        (eq (backend-name *target-backend*) :darwinarm64)))

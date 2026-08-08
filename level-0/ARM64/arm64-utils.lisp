@@ -427,6 +427,77 @@
   (sturb (:w imm0) (:@ p (:$ arm64::misc-subtag-offset))) ; ppc:634 (stb)
   (ret))                                   ; ppc:635 (blr)
 
+;;; Tag raw address (macptr) as a misc-tagged lisp object.  Used to mint
+;;; code-vectors in the MAP_JIT heap (outside GC's dynamic area).
+(defarm64lapfunction %tag-as-misc ((p arg_z))
+  (macptr-ptr imm0 p)
+  (add arg_z imm0 (:$ arm64::fulltag-misc))
+  (ret))
+
+;;; =====================================================================
+;;; Darwin/arm64 MAP_JIT code-vector heap (AREA_CODE stand-in)
+;;; =====================================================================
+;;; Non-moving bump pool outside the RW dynamic heap.  mark_root ignores
+;;; external pointers; plain br/blr (no HEAP_EXEC_BIAS) enters these VAs.
+;;; Boot-image / purified code stays in the IMAGE_BASE dual-map range.
+
+#+(and darwinarm64-target)
+(progn
+
+(defstatic *jit-code-base* nil)
+(defstatic *jit-code-limit* nil)
+(defstatic *jit-code-free* nil)
+
+(defconstant $map-jit #x0800)
+(defconstant $jit-code-bytes (* 64 1024 1024))
+;; Darwin mmap flags (avoid depending on interface DB during early L0).
+(defconstant $prot-rwx #x7)            ; PROT_READ|WRITE|EXEC
+(defconstant $map-private-anon #x1002) ; MAP_PRIVATE|MAP_ANON
+
+(defun %jit-wp (on)
+  (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
+           :int (if on 1 0) :void))
+
+(defun %ensure-jit-code-heap ()
+  (unless *jit-code-base*
+    (let* ((len $jit-code-bytes)
+           (p (ff-call (foreign-symbol-address "mmap")
+                       :address (%null-ptr)
+                       :unsigned-fullword len
+                       :int $prot-rwx
+                       :int (logior $map-private-anon $map-jit)
+                       :int -1 :long 0 :address)))
+      (when (or (%null-ptr-p p) (eql (%ptr-to-int p) -1))
+        (error "mmap(MAP_JIT) code heap failed"))
+      (setq *jit-code-base* p
+            *jit-code-limit* (%inc-ptr p len)
+            *jit-code-free* p)))
+  *jit-code-base*)
+
+(defun %allocate-code-vector (element-count)
+  "Allocate a code-vector of ELEMENT-COUNT u32 instruction words in MAP_JIT.
+Caller must fill under (%jit-wp nil) then (%make-code-executable)."
+  (declare (fixnum element-count))
+  (%ensure-jit-code-heap)
+  (let* ((payload (ash element-count 2))
+         (total (logandc2 (+ payload 8 15) 15))
+         (header (logior (ash element-count arm64::num-subtag-bits)
+                         arm64::subtag-code-vector)))
+    (without-interrupts
+      (let* ((free *jit-code-free*)
+             (next (%inc-ptr free total)))
+        (when (>= (%ptr-to-int next) (%ptr-to-int *jit-code-limit*))
+          (error "MAP_JIT code heap exhausted"))
+        (%jit-wp nil)
+        (setf (%%get-unsigned-longlong free 0) header)
+        (do ((o 8 (+ o 4))) ((>= o total))
+          (setf (%get-unsigned-long free o) 0))
+        (setq *jit-code-free* next)
+        (%jit-wp t)
+        (%tag-as-misc free)))))
+
+) ; progn
+
 ;;; =====================================================================
 ;;; %class-of-instance — ppc-utils.lisp:459
 ;;; =====================================================================

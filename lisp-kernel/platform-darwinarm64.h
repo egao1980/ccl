@@ -35,6 +35,10 @@ typedef ucontext_t ExceptionInformation;
  * fetches that NX-fault on the RW mapping are restarted at PC+bias
  * (handle_protection_violation).  Bias must preserve low tag bits
  * (fulltag-misc=12 code-vector entry points).
+ *
+ * Call sites only add HEAP_EXEC_BIAS when the code-vector VA is in the
+ * IMAGE_BASE band (addr>>40 == 0x30).  MAP_JIT AREA_CODE allocations
+ * and other non-heap RX regions use a plain br/blr.
  */
 #ifndef HEAP_EXEC_BIAS
 #define HEAP_EXEC_BIAS 0x004000000000ULL

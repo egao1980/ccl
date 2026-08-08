@@ -100,17 +100,28 @@
                                           target::subtag-function)))
          (i prefix-size))
     (declare (fixnum i constants-size))
-    (let* ((code-vector (%alloc-misc
-                         (+ code-vector-size prefix-size)
-                         (if cross-compiling
-                           target::subtag-xcode-vector
-                           arm64::subtag-code-vector))))
+    (let* ((code-vector
+            (cond
+              ;; Native Darwin/arm64: MAP_JIT code heap (no HEAP_EXEC_BIAS).
+              #+(and darwinarm64-target)
+              ((not cross-compiling)
+               (%allocate-code-vector (+ code-vector-size prefix-size)))
+              (t
+               (%alloc-misc
+                (+ code-vector-size prefix-size)
+                (if cross-compiling
+                  target::subtag-xcode-vector
+                  arm64::subtag-code-vector))))))
+      #+darwinarm64-target
+      (unless cross-compiling (%jit-wp nil))
       (dotimes (j prefix-size)
         (setf (uvref code-vector j) (pop prefix)))
       (do-dll-nodes (insn seg)
         (unless (eql (arm64::instruction-element-size insn) 0)
           (setf (uvref code-vector i) (arm64::instruction-word insn))
           (incf i)))
+      #+darwinarm64-target
+      (unless cross-compiling (%jit-wp t))
       (dolist (pair arm64::*constants*)
         (let ((imm (car pair))
               (k (cdr pair)))

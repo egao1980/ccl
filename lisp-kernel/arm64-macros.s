@@ -104,12 +104,17 @@ _SP\name:
         ldur \dest, [\miscobj, #misc_header_offset]
         .endm
 
-/* Darwin W^X dual-map: lisp heap is RW; RX alias at VA+HEAP_EXEC_BIAS
- * (platform-darwinarm64.h).  Bias before br so calls enter the RX alias. */
+/* Darwin W^X dual-map: lisp heap at IMAGE_BASE (0x30<<40) is RW; RX
+ * alias at VA+HEAP_EXEC_BIAS.  Bias only that range — MAP_JIT / pure RX
+ * code-vectors live elsewhere and must use a plain br. */
         .macro br_codevector reg
 #if defined(__APPLE__)
+        lsr imm0, \reg, #40
+        cmp imm0, #0x30
+        b.ne 0f
         movz imm0, #0x40, lsl #32
         add \reg, \reg, imm0
+0:
 #endif
         br \reg
         .endm

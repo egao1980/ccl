@@ -799,8 +799,9 @@
 ;;; vector as `object`).  Call scratch must NEVER be an allocatable
 ;;; arg/imm/temp-with-ABI-meaning -- v2 cont-71 class; temp0 is dead at
 ;;; every call boundary (callee prologue reads only nfn).
-;;; Darwin W^X: bias br/blr by HEAP_EXEC_BIAS (#x40<<32) to the RX dual-map.
-;;; Also defined in arm64-backend.lisp for the vinsn predicate table.
+;;; Darwin W^X: bias IMAGE_BASE (#x30<<40) heap code-vectors by
+;;; HEAP_EXEC_BIAS (#x40<<32) onto the RX dual-map.  MAP_JIT / pure RX
+;;; live outside that range — plain br/blr.  Predicate also in arm64-backend.
 (defun darwinarm64-heap-exec-bias-p ()
   (and *target-backend*
        (eq (backend-name *target-backend*) :darwinarm64)))
@@ -808,12 +809,17 @@
 (define-arm64-vinsn (jump-known-symbol :jumplr) (()
                                                  ()
                                                  ((cv (:lisp #.arm64::temp0))
-                                                  (bias (:u64 #.arm64::imm0))))
+                                                  (bias (:u64 #.arm64::imm0))
+                                                  (hi (:u64 #.arm64::imm1))))
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
   ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
    (movz bias (:$ #x40 :lsl 32))
-   (add cv cv bias))
+   (add cv cv bias)
+   :skip-bias)
   (br cv))
 
 ;;; ============ call-known-symbol ============
@@ -825,12 +831,17 @@
 (define-arm64-vinsn (call-known-symbol :call) (((result (:lisp #.arm64::arg_z)))
                                                ()
                                                ((cv (:lisp #.arm64::temp0))
-                                                (bias (:u64 #.arm64::imm0))))
+                                                (bias (:u64 #.arm64::imm0))
+                                                (hi (:u64 #.arm64::imm1))))
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
   ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
    (movz bias (:$ #x40 :lsl 32))
-   (add cv cv bias))
+   (add cv cv bias)
+   :skip-bias)
   (blr cv))
 
 ;;; ============ jump-known-function / call-known-function ============
@@ -845,11 +856,16 @@
 (define-arm64-vinsn (jump-known-function :jumplr) (()
                                                    ()
                                                    ((cv (:lisp #.arm64::temp0))
-                                                    (bias (:u64 #.arm64::imm0))))
+                                                    (bias (:u64 #.arm64::imm0))
+                                                    (hi (:u64 #.arm64::imm1))))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
   ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
    (movz bias (:$ #x40 :lsl 32))
-   (add cv cv bias))
+   (add cv cv bias)
+   :skip-bias)
   (br cv))
 
 ;;; NO result spec: the PPC64 donor (@3715) declares none and every emit
@@ -860,11 +876,16 @@
 (define-arm64-vinsn (call-known-function :call) (()
                                                  ()
                                                  ((cv (:lisp #.arm64::temp0))
-                                                  (bias (:u64 #.arm64::imm0))))
+                                                  (bias (:u64 #.arm64::imm0))
+                                                  (hi (:u64 #.arm64::imm1))))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
   ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
    (movz bias (:$ #x40 :lsl 32))
-   (add cv cv bias))
+   (add cv cv bias)
+   :skip-bias)
   (blr cv))
 
 ;;; ============ %unbox-u32 ============

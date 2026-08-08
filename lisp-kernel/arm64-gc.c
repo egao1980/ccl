@@ -2650,9 +2650,23 @@ purify(TCR *tcr, signed_natural param)               /* ppc-gc.c:2001-2048 */
 
       }
     }
+#if defined(DARWIN) && defined(ARM64)
+    /* ProtectMemory is PROT_NONE on Darwin/arm64 (stack guards).  Pure
+       code needs RX on the canonical VA — same as image.c AREA_READONLY.
+       Dual-map RX alias remains for any unpurified IMAGE_BASE heap code;
+       MAP_JIT code is outside that band and needs no alias. */
+    {
+      natural span = align_to_power_of_2(new_pure_area->active - new_pure_area->low,
+                                         log2_page_size);
+      if (span && mprotect(new_pure_area->low, span, PROT_READ | PROT_EXEC) != 0) {
+        Bug(NULL, "purify: mprotect(RX) failed, errno = %d", errno);
+      }
+    }
+#else
     ProtectMemory(new_pure_area->low,
                   align_to_power_of_2(new_pure_area->active-new_pure_area->low,
                                       log2_page_size));
+#endif
     lisp_global(IN_GC) = 0;
     just_purified_p = true;
     return 0;
