@@ -18,6 +18,7 @@
 #include "lisp_globals.h"
 #include "gc.h"
 #include "area.h"
+#include "memprotect.h"
 #include <stdlib.h>
 #include <string.h>
 #include "lisp-exceptions.h"
