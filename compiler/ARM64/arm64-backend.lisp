@@ -266,8 +266,7 @@
 
 (defvar *arm64-backend* (car *known-arm64-backends*))
 
-;;; Vinsn predicate: Darwin/arm64 dual-map RX entry (HEAP_EXEC_BIAS).
-;;; Used by call/jump-known-{symbol,function} vinsns.
+;;; Vinsn predicate: Darwin/arm64 RX dual-map (HEAP_EXEC_BIAS).
 (defun darwinarm64-heap-exec-bias-p ()
   (and *target-backend*
        (eq (backend-name *target-backend*) :darwinarm64)))

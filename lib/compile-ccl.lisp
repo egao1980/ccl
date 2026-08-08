@@ -694,7 +694,10 @@ the lisp and run REBUILD-CCL again.")
                        (or (ignore-errors (file-write-date (standard-image-name)))
                            0)))
                  (with-input-from-string (cmd (format nil
+                                                #-darwinarm64-target
                                                 "(save-application ~s)"
+                                                #+darwinarm64-target
+                                                "(save-application ~s :purify nil)"
                                                 (standard-image-name)))
                    (with-output-to-string (output)
                      (multiple-value-bind (status exit-code)

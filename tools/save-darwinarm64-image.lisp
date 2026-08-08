@@ -10,4 +10,3 @@
 
 (format t "~&;; save-application darm64cl.image :purify nil~%")
 (save-application "darm64cl.image" :purify nil)
-)

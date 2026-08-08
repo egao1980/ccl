@@ -243,10 +243,8 @@ UnCommitMemory (LogicalAddress start, natural len) {
 #else
   if (len) {
 #if defined(DARWIN) && defined(ARM64)
-    /* Drop the RX dual-map alias before replacing the RW mapping.
-       mmap(MAP_FIXED) over the shared remap source can leave a stale
-       executable alias at VA+HEAP_EXEC_BIAS — biased br/blr then runs
-       ghost pages (SIGILL "neither udf nor brk" in long ANSI runs). */
+    /* Drop RX dual-map alias before replacing the RW mapping (stale
+       alias at VA+HEAP_EXEC_BIAS would otherwise remain executable). */
     if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
       mach_vm_address_t rx =
         (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);

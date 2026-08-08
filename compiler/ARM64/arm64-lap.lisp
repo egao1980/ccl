@@ -117,12 +117,7 @@
           (setf (uvref constants-vector (1+ k)) imm)))
       (setf (uvref constants-vector (1- constants-size)) lfbits
             (uvref constants-vector 0) code-vector)
-      ;; I/D-cache sync — required on arm64 (and Darwin dual-map RX).
-      ;; Without this, freshly compiled code can SIGILL intermittently
-      ;; when the I-cache still holds a stale line (suite flake:
-      ;; "Unhandled exception 4 … neither udf nor brk").  ARM32/PPC
-      ;; lap-generate-code already call %make-code-executable; nfasload
-      ;; does too for fasls — only this resident LAP path was missing.
+      ;; Match ARM32/PPC: flush I/D cache before execution.
       (unless cross-compiling
         (%make-code-executable code-vector))
       ;; %alloc-misc returns a misc-tagged vector; hand the resident

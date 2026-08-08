@@ -799,10 +799,8 @@
 ;;; vector as `object`).  Call scratch must NEVER be an allocatable
 ;;; arg/imm/temp-with-ABI-meaning -- v2 cont-71 class; temp0 is dead at
 ;;; every call boundary (callee prologue reads only nfn).
-;;; Darwin W^X: add HEAP_EXEC_BIAS (#x40<<32) before br/blr so the call
-;;; enters the RX dual-map alias instead of NX-faulting once per call.
-;;; Predicate also defined in arm64-backend.lisp; keep a copy here so
-;;; reloading this file alone is enough after a kernel bump.
+;;; Darwin W^X: bias br/blr by HEAP_EXEC_BIAS (#x40<<32) to the RX dual-map.
+;;; Also defined in arm64-backend.lisp for the vinsn predicate table.
 (defun darwinarm64-heap-exec-bias-p ()
   (and *target-backend*
        (eq (backend-name *target-backend*) :darwinarm64)))
@@ -844,8 +842,6 @@
 ;;; 32-bit ARM's one-instruction (ldr pc ...) trick has no arm64 analog --
 ;;; the tagged-code-vector branch is the arm64 equivalent
 ;;; (doc/porting/arm64.md "Functions").
-;;; Darwin W^X: add HEAP_EXEC_BIAS (#x40<<32) before br/blr so the call
-;;; enters the RX dual-map alias instead of NX-faulting once per call.
 (define-arm64-vinsn (jump-known-function :jumplr) (()
                                                    ()
                                                    ((cv (:lisp #.arm64::temp0))
