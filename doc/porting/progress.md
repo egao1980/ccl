@@ -1,5 +1,18 @@
 # Progress notes on an arm64 port
 
+
+## August 2026 — unbiased + DUAL_MAP=0
+
+* `darwinarm64-heap-exec-bias-p` stays `nil` (vinsns no longer overrides backend).
+* Full cross-bootstrap + cold-load + `:purify t` produces an unbiased image.
+* Kernel / `platform-darwinarm64.h` default `DARWIN_ARM64_DUAL_MAP=0`.
+* Compiled `#_` / math / cocoa CDB / purify smokes green on DM=0.
+* Interpreted `%ff-call` landed; frame re-establish after `_SPffcall` (needs
+  image rebuild from boot after tip `3ba8197b`). Mid-session vinsns reload
+  + `save-application` corrupts the image — always rebuild from bootstrap.
+* Still open: objc-bridge require path; ASLR; strip dual-map scaffolding;
+  remaining CDB dirs (carbon/quartz scripts exist; gl regenerated).
+
 ## August 2026 — Darwin/arm64 boot image (egao1980)
 
 Built `arm64-boot.image` via host CCL 1.13 (Rosetta) and got the native
