@@ -1,11 +1,12 @@
 #!/bin/sh
-# Translate one C header to .ffi under ./<sdk-relative-path>/ via ffigen5.
+# Translate one C/ObjC header to .ffi under ./<sdk-relative-path>/ via ffigen5.
 # Used by tools/darwin-arm64-cdb/*-populate.sh.
 #
 # Env:
-#   FFIGEN   — path to ffigen5 binary (default: sibling ccl-ffigen build)
-#   SDK      — MacOSX.sdk (default: xcrun --show-sdk-path)
-#   CFLAGS   — extra flags (populate scripts set -arch arm64 -isysroot …)
+#   FFIGEN      — path to ffigen5 binary (default: sibling ccl-ffigen build)
+#   SDK         — MacOSX.sdk (default: xcrun --show-sdk-path)
+#   CFLAGS      — extra flags (populate scripts set -arch arm64 -isysroot …)
+#   FFIGEN_LANG — clang -x language (default: c; cocoa uses objective-c)
 
 set -e
 if [ -z "${FFIGEN}" ]; then
@@ -18,6 +19,8 @@ if [ -z "${FFIGEN}" ]; then
     FFIGEN=ffigen5
   fi
 fi
+
+LANG_MODE=${FFIGEN_LANG:-c}
 
 includes=""
 other_flags=""
@@ -53,7 +56,7 @@ output_file="`basename "$header" .h`.ffi"
 output_path="$output_dir/$output_file"
 echo "$header"
 # shellcheck disable=SC2086
-if ! "$FFIGEN" $CFLAGS $other_flags -x c $includes "$header" -o "$output_path"; then
+if ! "$FFIGEN" $CFLAGS $other_flags -x "$LANG_MODE" $includes "$header" -o "$output_path"; then
   echo "WARN: ffigen failed: $header" >&2
   rm -f "$output_path"
   exit 0

@@ -1,5 +1,8 @@
 #!/bin/sh
-# Darwin/arm64 Cocoa interface populate (ObjC runtime + Cocoa.h umbrella).
+# Darwin/arm64 Cocoa interface populate (ObjC runtime + Foundation + AppKit).
+#
+# Uses -x objective-c (not -x c) so ffigen5 emits objc-class / methods.
+# FILTER_FFI_MACROS=frameworks keeps only Frameworks/ macros (fast parse).
 #
 #   cd $CCL/darwin-arm64-headers/cocoa/C
 #   $CCL/tools/darwin-arm64-cdb/cocoa-populate.sh
@@ -7,7 +10,7 @@
 #   ./darm64cl --stack-size 16M --thread-stack-size 16M --no-init --batch \
 #     < tools/darwin-arm64-cdb/parse-cocoa.lisp
 #
-# BACK UP cocoa/*.cdb first. Uses the same h-to-ffi.sh + filter-ffi.py as libc.
+# BACK UP cocoa/*.cdb first.
 
 set -e
 HERE=$(cd "$(dirname "$0")" && pwd)
@@ -27,7 +30,10 @@ fi
 
 rm -rf Applications Library System usr
 
-CFLAGS="-arch arm64 -isysroot ${SDK} -ObjC"
+export FFIGEN_LANG=objective-c
+export FILTER_FFI_MACROS=frameworks
+
+CFLAGS="-arch arm64 -isysroot ${SDK} -F${SDK}/System/Library/Frameworks"
 CLANG_BIN=$(xcrun --find clang)
 CLANG_ROOT=$(dirname "$(dirname "$CLANG_BIN")")
 CLANG_INC="$CLANG_ROOT/lib/clang"
@@ -39,17 +45,19 @@ if [ -d "$CLANG_INC" ]; then
 fi
 export CFLAGS SDK
 
-# Modern SDKs moved objc headers under /usr/include/objc or the SDK share.
+# ObjC runtime (C headers still useful under objective-c mode)
 for h in \
-  "${SDK}/usr/include/objc/objc-runtime.h" \
-  "${SDK}/usr/include/objc/runtime.h" \
-  "${SDK}/usr/include/objc/objc-exception.h" \
   "${SDK}/usr/include/objc/objc.h" \
-  "${SDK}/usr/include/objc/Object.h" \
-  "${SDK}/usr/include/objc/Protocol.h" \
-  "${SDK}/System/Library/Frameworks/Cocoa.framework/Headers/Cocoa.h"
+  "${SDK}/usr/include/objc/runtime.h" \
+  "${SDK}/usr/include/objc/objc-runtime.h" \
+  "${SDK}/usr/include/objc/objc-exception.h" \
+  "${SDK}/usr/include/objc/NSObject.h" \
+  "${SDK}/System/Library/Frameworks/Foundation.framework/Headers/Foundation.h" \
+  "${SDK}/System/Library/Frameworks/AppKit.framework/Headers/AppKit.h"
 do
   h-to-ffi.sh "$h"
 done
 
 echo ";; cocoa-populate done under $(pwd)"
+echo ";; objc-class count:" "$(grep -h '^(objc-class ' $(find . -name '*.ffi') 2>/dev/null | wc -l)"
+echo ";; objc-instance-method count:" "$(grep -h '^(objc-instance-method ' $(find . -name '*.ffi') 2>/dev/null | wc -l)"

@@ -155,6 +155,12 @@ loop (mdbergmann on #11).
 | **Purify + native image** (xrme brainstorm) | Image code as Mach-O/ELF RX; `MAP_JIT` only for redefs | Save/merge story for dead code vectors |
 | **Entitlements** (`allow-jit` / `allow-unsigned-executable-memory`) | Needed for hardened/signing; unsigned ad-hoc kernels often already get `MAP_JIT` | Do **not** restore true RWX on Apple Silicon; `disable-executable-page-protection` ≡ unsigned-exec there |
 
+**Current hybrid:** dual-map covers **IMAGE_BASE** fasl/cold-load code;
+runtime compile uses **MAP_JIT** + WP (bias only IMAGE_BASE).  Experimental
+`:purify t` reload is green (`tools/run-darwin-purify-smoke.sh`); production
+save stays `:purify nil` (`tools/save-darwinarm64-image.lisp`) until fasl
+cold-load no longer needs the RX alias — then dual-map can drop.
+
 **Boot path (already):** map heap RW → fill → `mprotect` RX (page-aligned).
 **Runtime compile:** needs one of the rows above before FASL redefine works.
 
@@ -200,8 +206,8 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
 * **libc** regenerated for arm64 (`tools/darwin-arm64-cdb/libc-populate.sh`,
   current MacOSX.sdk, `-arch arm64`), including **math.h** via
   `filter-ffi.py` (Availability macros + `(null)` / Half types).
-  Cocoa populate script exists; full umbrella parse still too heavy —
-  keep x86-copy cocoa CDB for now.  See `doc/porting/darwin-cdb.md`.
+* **cocoa** regenerated as ObjC (`FFIGEN_LANG=objective-c`, Foundation +
+  AppKit; `:pending` macro parse).  See `doc/porting/darwin-cdb.md`.
 
 ### Apple AAPCS64 FFI
 

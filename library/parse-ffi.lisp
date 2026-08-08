@@ -376,21 +376,34 @@
           (when expression (values (eval-parsed-c-expression expression constant-alist) t)))))))
 
 ;;; Repeatedly iterate over the macros until nothing new's defined.
+;;; Macros that parse but don't evaluate are marked :pending and only
+;;; retried after a pass that defines new constants — otherwise Cocoa-
+;;; scale .ffi (thousands of macros) re-evals forever and appears hung.
 (defun process-defined-macros (ffi-macros constant-alist parameterized-macros)
   (let* ((new-def ()))
     (loop
         (setq new-def nil)
         (dolist (macro ffi-macros)
+          (when (eq (ffi-macro-disposition macro) :pending)
+            (setf (ffi-macro-disposition macro) nil)))
+        (dolist (macro ffi-macros)
           (unless (ffi-macro-disposition macro)
             (let* ((expansion (ffi-macro-expansion macro))
                    (name (ffi-macro-name macro))
                    (value nil))
-              (if (string= name expansion)
-                (setf (ffi-macro-disposition macro) t)
-                (when (setq value (eval-c-expression macro constant-alist parameterized-macros))
-                  (push (cons name value) constant-alist)
-                  (setf (ffi-macro-disposition macro) t)
-                  (setq new-def t))))))
+              (cond ((string= name expansion)
+                     (setf (ffi-macro-disposition macro) t))
+                    ((setq value (eval-c-expression macro constant-alist parameterized-macros))
+                     (push (cons name value) constant-alist)
+                     (setf (ffi-macro-disposition macro) t)
+                     (setq new-def t))
+                    ((or (ffi-macro-expression macro)
+                         (eq (ffi-macro-disposition macro) :bad-parse)
+                         (eq (ffi-macro-disposition macro) :bad-tokenize))
+                     (unless (ffi-macro-disposition macro)
+                       (setf (ffi-macro-disposition macro) :pending)))
+                    (t
+                     (setf (ffi-macro-disposition macro) :give-up))))))
         (unless new-def
           (return (values (reverse constant-alist) nil))))))
 

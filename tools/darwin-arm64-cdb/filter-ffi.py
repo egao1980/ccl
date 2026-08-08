@@ -3,8 +3,15 @@
 
 Drops:
   * macros from Availability*.h / ptrcheck.h (circular expand → stack overflow)
-  * top-level (function …) forms that mention (null) — ffigen5 emits that for
-    unmapped clang types (CXType_Half / __fp16, etc.)
+  * top-level (function …) forms that mention (null) — unmapped clang types
+  * optionally all macros, or macros outside Apple frameworks (see env)
+
+Env:
+  FILTER_FFI_MACROS=all|frameworks|default
+    all         — keep macros (only Availability/ptrcheck dropped)
+    frameworks  — keep macros whose source path contains /Frameworks/
+    none        — drop every macro (fast cocoa parse; enum-idents remain)
+    default     — same as all
 
 Usage:
   filter-ffi.py [file.ffi …]          # rewrite in place
@@ -12,6 +19,7 @@ Usage:
 """
 from __future__ import annotations
 
+import os
 import re
 import sys
 from pathlib import Path
@@ -40,9 +48,18 @@ def _balanced_form_lines(lines: list[str], start: int) -> tuple[list[str], int]:
     return out, i
 
 
-def filter_text(text: str) -> tuple[str, dict[str, int]]:
+def _keep_macro(blob: str, mode: str) -> bool:
+    if any(s in blob for s in DROP_MACRO_SUBSTR):
+        return False
+    if mode == "none":
+        return False
+    if mode == "frameworks":
+        return "/Frameworks/" in blob
+    return True
+
+
+def filter_text(text: str, macro_mode: str = "default") -> tuple[str, dict[str, int]]:
     lines = text.splitlines(keepends=True)
-    # normalize to always have newline handling
     if lines and not lines[-1].endswith("\n") and lines[-1] != "":
         lines[-1] += "\n"
     stats = {"macros_dropped": 0, "functions_dropped": 0, "kept": 0}
@@ -53,7 +70,7 @@ def filter_text(text: str) -> tuple[str, dict[str, int]]:
         if MACRO_START.match(line):
             form, i = _balanced_form_lines(lines, i)
             blob = "".join(form)
-            if any(s in blob for s in DROP_MACRO_SUBSTR):
+            if not _keep_macro(blob, macro_mode):
                 stats["macros_dropped"] += 1
                 continue
             out.extend(form)
@@ -75,12 +92,15 @@ def filter_text(text: str) -> tuple[str, dict[str, int]]:
 
 
 def main(argv: list[str]) -> int:
+    mode = os.environ.get("FILTER_FFI_MACROS", "default").lower()
+    if mode not in ("all", "frameworks", "none", "default"):
+        mode = "default"
     if len(argv) <= 1:
         text = sys.stdin.read()
-        filtered, stats = filter_text(text)
+        filtered, stats = filter_text(text, mode)
         sys.stdout.write(filtered)
         print(
-            f";; filter-ffi: macros_dropped={stats['macros_dropped']} "
+            f";; filter-ffi macros={mode}: dropped={stats['macros_dropped']} "
             f"functions_dropped={stats['functions_dropped']}",
             file=sys.stderr,
         )
@@ -88,10 +108,10 @@ def main(argv: list[str]) -> int:
     for arg in argv[1:]:
         path = Path(arg)
         text = path.read_text(encoding="utf-8", errors="replace")
-        filtered, stats = filter_text(text)
+        filtered, stats = filter_text(text, mode)
         path.write_text(filtered, encoding="utf-8")
         print(
-            f"{path}: macros_dropped={stats['macros_dropped']} "
+            f"{path}: macros={mode} dropped={stats['macros_dropped']} "
             f"functions_dropped={stats['functions_dropped']}"
         )
     return 0
