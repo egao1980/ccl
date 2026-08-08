@@ -1544,10 +1544,15 @@ result-type-specifer is :VOID or NIL"
           (let* ((spec (car specs)))
             (cond ((eq spec :void)
                    ;; must be last arg-spec; remaining args should be
-                   ;; keyword/value pairs
+                   ;; keyword/value pairs.  Emit :variadic as a zero-width
+                   ;; marker so Darwin/arm64 aapcs64-ff-call can force the
+                   ;; following args onto the stack (Apple ABI: all `...`
+                   ;; args are stack-only).  Linux ignores the marker.
                    (unless (evenp (length args))
                      (error "Remaining arguments should be keyword/value pairs: ~s"
                             args))
+                   (call :variadic)
+                   (call nil)
                    (do* ()
                         ((null args))
                      (call (pop args))
@@ -1622,7 +1627,8 @@ result-type-specifer is :VOID or NIL"
     :unsigned-doubleword :unsigned-fullword :unsigned-halfword :unsigned-byte
     :address
     :single-float :double-float
-    :void))
+    :void
+    :variadic))
 
 (defun null-coerce-foreign-arg (arg-type-keyword argform)
   (declare (ignore arg-type-keyword))

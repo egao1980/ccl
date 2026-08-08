@@ -9085,10 +9085,10 @@
 ;;; .SPffcall must be FP-clean between entry and the blr, so the FP args the
 ;;; p2 loaded into V0..V(nfpr-1) survive the stack switch.
 ;;;
-;;; One code path serves Darwin and Linux: the layout is identical, and the
-;;; Darwin divergences (variadic args forced to the stack; natural-size stack
-;;; packing) are handled as target-os policy in the register-vs-stack
-;;; assignment below, not as a separate variant.
+;;; One code path serves Darwin and Linux: the layout is identical.
+;;; Darwin variadic (`:variadic' sentinel from %external-call-expander):
+;;; Apple passes all `...' args on the stack as 8-byte slots; fixed args
+;;; before the sentinel still use x0-x7/d0-d7.  Linux ignores the sentinel.
 (defarm642 arm642-aapcs64-ff-call aapcs64-ff-call (seg vreg xfer address argspecs argvals resultspec &optional monitor)
   (declare (ignore monitor))
   (let* ((*arm642-vstack* *arm642-vstack*)
@@ -9103,28 +9103,38 @@
          (nother-words 0)
          (nfpr-args 0)
          (ngpr-args 0)
-         (fp-loads ()))
+         (fp-loads ())
+         (force-stack nil)
+         (darwin-variadic-p (eq (backend-target-os *target-backend*) :darwinarm64)))
     (declare (fixnum nsingle-floats ndouble-floats nfpr-args ngpr-args
                      nother-words gpr-offset other-offset
                      single-float-offset double-float-offset))
     ;; Pass 1: count slots per class.  AAPCS64: first 8 GPR-class args
     ;; in x0-x7 (a 64-bit integer is ONE slot -- v2 s86 lesson), first
-    ;; 8 FP-class in d0-d7, rest overflow to the stack.
+    ;; 8 FP-class in d0-d7, rest overflow to the stack.  After a Darwin
+    ;; :variadic sentinel every remaining arg is an 8-byte stack slot.
     (dolist (argspec argspecs)
-      (case argspec
-        ((:double-float :single-float)
-         (incf nfpr-args)
-         (if (<= nfpr-args 8)
-           (if (eq argspec :double-float)
-             (incf ndouble-floats)
-             (incf nsingle-floats))
-           ;; Overflow FP: v2's legs carry PPC32-EABI slotting; loud
-           ;; stop until the AAPCS64 packing is ratified (header note).
-           (compiler-bug "aapcs64-ff-call: more than 8 floating-point ~
-                          args (~s) not yet supported" argspecs)))
-        (t (incf ngpr-args)
-           (if (> ngpr-args 8)
-             (incf nother-words)))))
+      (cond ((eq argspec :variadic)
+             (when darwin-variadic-p
+               (setq force-stack t)))
+            ((or (eq argspec :double-float) (eq argspec :single-float))
+             (cond (force-stack
+                    (incf nother-words))
+                   (t
+                    (incf nfpr-args)
+                    (if (<= nfpr-args 8)
+                      (if (eq argspec :double-float)
+                        (incf ndouble-floats)
+                        (incf nsingle-floats))
+                      (compiler-bug "aapcs64-ff-call: more than 8 floating-point ~
+                                     args (~s) not yet supported" argspecs)))))
+            (t
+             (cond (force-stack
+                    (incf nother-words))
+                   (t
+                    (incf ngpr-args)
+                    (when (> ngpr-args 8)
+                      (incf nother-words)))))))
     (let* ((single-words (+ 8 nother-words nsingle-floats))
            (total-words (if (zerop ndouble-floats)
                           single-words
@@ -9147,7 +9157,7 @@
             (+ *arm642-cstack*
                (+ arm64::c-frame.minsize
                   (ash (logand -2 (1+ total-words)) 3)))))
-    (setq ngpr-args 0 nfpr-args 0)
+    (setq ngpr-args 0 nfpr-args 0 force-stack nil)
     (arm642-vpush-register seg (arm642-one-untargeted-reg-form
                                 seg address arm64::arg_z))
     ;; Pass 2: evaluate each arg form into its frame slot.  FP args
@@ -9160,64 +9170,87 @@
       (let* ((valform (car vals))
              (spec (car specs))
              (absptr (acode-absolute-ptr-p valform)))
-        (case spec
-          ;; FPR regspecs are raw FPR numbers under :class :fpr (his
-          ;; arm642-immediate idiom); no dN name constants in his arch.
-          ;; Staging register d1 mirrors the v2 donor's fp1 choice.
-          (:double-float
-           (let* ((df ($ 1 :class :fpr :mode :double-float)))
-             (incf nfpr-args)
-             (arm642-one-targeted-reg-form seg valform df)
-             (! set-double-c-arg df double-float-offset)
-             (push (cons :double-float double-float-offset) fp-loads)
-             (incf double-float-offset 2)))
-          (:single-float
-           (let* ((sf ($ 1 :class :fpr :mode :single-float)))
-             (incf nfpr-args)
-             (arm642-one-targeted-reg-form seg valform sf)
-             (! set-single-c-arg sf single-float-offset)
-             (push (cons :single-float single-float-offset) fp-loads)
-             (incf single-float-offset)))
-          ;; 64-bit integer: full value in imm0 via gets64/getu64
-          ;; (w10), ONE GPR slot (v2 s86 AAPCS64 deviation kept).
-          ((:signed-doubleword :unsigned-doubleword)
-           (arm642-one-targeted-reg-form seg valform ($ arm64::arg_z))
-           (if (eq spec :signed-doubleword)
-             (! gets64)
-             (! getu64))
-           (incf ngpr-args)
-           (cond ((<= ngpr-args 8)
-                  (! set-c-arg ($ arm64::imm0) gpr-offset)
-                  (incf gpr-offset))
-                 (t
-                  (! set-c-arg ($ arm64::imm0) other-offset)
-                  (incf other-offset))))
-          (:address
-           (with-imm-target () (ptr :address)
-             (if absptr
-               (arm642-lri seg ptr absptr)
-               (arm642-form seg ptr nil valform))
-             (incf ngpr-args)
-             (cond ((<= ngpr-args 8)
-                    (! set-c-arg ptr gpr-offset)
-                    (incf gpr-offset))
-                   (t
-                    (! set-c-arg ptr other-offset)
-                    (incf other-offset)))))
-          (t
-           (with-imm-target () (valreg :natural)
-             (let* ((reg (arm642-unboxed-integer-arg-to-reg
-                          seg valform valreg spec)))
-               (incf ngpr-args)
-               (cond ((<= ngpr-args 8)
-                      (! set-c-arg reg gpr-offset)
-                      (incf gpr-offset))
+        (cond ((eq spec :variadic)
+               (when darwin-variadic-p
+                 (setq force-stack t)))
+              ;; FPR regspecs are raw FPR numbers under :class :fpr (his
+              ;; arm642-immediate idiom); no dN name constants in his arch.
+              ;; Staging register d1 mirrors the v2 donor's fp1 choice.
+              ((eq spec :double-float)
+               (let* ((df ($ 1 :class :fpr :mode :double-float)))
+                 (arm642-one-targeted-reg-form seg valform df)
+                 (cond (force-stack
+                        (! set-double-c-arg df other-offset)
+                        (incf other-offset))
+                       (t
+                        (incf nfpr-args)
+                        (! set-double-c-arg df double-float-offset)
+                        (push (cons :double-float double-float-offset) fp-loads)
+                        (incf double-float-offset 2)))))
+              ((eq spec :single-float)
+               (let* ((sf ($ 1 :class :fpr :mode :single-float)))
+                 (arm642-one-targeted-reg-form seg valform sf)
+                 (cond (force-stack
+                        ;; Darwin variadic: pad to an 8-byte stack slot.
+                        (! set-single-c-arg sf other-offset)
+                        (incf other-offset))
+                       (t
+                        (incf nfpr-args)
+                        (! set-single-c-arg sf single-float-offset)
+                        (push (cons :single-float single-float-offset) fp-loads)
+                        (incf single-float-offset)))))
+              ;; 64-bit integer: full value in imm0 via gets64/getu64
+              ;; (w10), ONE GPR slot (v2 s86 AAPCS64 deviation kept).
+              ((or (eq spec :signed-doubleword) (eq spec :unsigned-doubleword))
+               (arm642-one-targeted-reg-form seg valform ($ arm64::arg_z))
+               (if (eq spec :signed-doubleword)
+                 (! gets64)
+                 (! getu64))
+               (cond (force-stack
+                      (! set-c-arg ($ arm64::imm0) other-offset)
+                      (incf other-offset))
                      (t
-                      (! set-c-arg reg other-offset)
-                      (incf other-offset)))))))))
+                      (incf ngpr-args)
+                      (cond ((<= ngpr-args 8)
+                             (! set-c-arg ($ arm64::imm0) gpr-offset)
+                             (incf gpr-offset))
+                            (t
+                             (! set-c-arg ($ arm64::imm0) other-offset)
+                             (incf other-offset))))))
+              ((eq spec :address)
+               (with-imm-target () (ptr :address)
+                 (if absptr
+                   (arm642-lri seg ptr absptr)
+                   (arm642-form seg ptr nil valform))
+                 (cond (force-stack
+                        (! set-c-arg ptr other-offset)
+                        (incf other-offset))
+                       (t
+                        (incf ngpr-args)
+                        (cond ((<= ngpr-args 8)
+                               (! set-c-arg ptr gpr-offset)
+                               (incf gpr-offset))
+                              (t
+                               (! set-c-arg ptr other-offset)
+                               (incf other-offset)))))))
+              (t
+               (with-imm-target () (valreg :natural)
+                 (let* ((reg (arm642-unboxed-integer-arg-to-reg
+                              seg valform valreg spec)))
+                   (cond (force-stack
+                          (! set-c-arg reg other-offset)
+                          (incf other-offset))
+                         (t
+                          (incf ngpr-args)
+                          (cond ((<= ngpr-args 8)
+                                 (! set-c-arg reg gpr-offset)
+                                 (incf gpr-offset))
+                                (t
+                                 (! set-c-arg reg other-offset)
+                                 (incf other-offset)))))))))))
     ;; Load the FP argument registers from the staging slots.  AAPCS64
     ;; FP args index from d0 (v2 s36 deviation kept; fp1-based indexing
-    ;; is the PPC numbering).
+    ;; is the PPC numbering).  Darwin-variadic FP args never appear here.
     (do* ((fpreg 0 (1+ fpreg))          ;d0..d7 -- AAPCS64 FP arg regs
           (reloads (nreverse fp-loads) (cdr reloads)))
          ((or (null reloads) (= fpreg 8)))

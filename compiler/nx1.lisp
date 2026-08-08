@@ -1412,7 +1412,9 @@
   '(:double-float :single-float :address :signed-doubleword
     :unsigned-doubleword :signed-fullword :unsigned-fullword
     :signed-halfword :unsigned-halfword :signed-byte :unsigned-byte
-    :hybrid-int-float :hybrid-float-int :hybrid-float-float))
+    :hybrid-int-float :hybrid-float-int :hybrid-float-float
+    ;; Zero-width marker: following args are Darwin/arm64 variadic (stack).
+    :variadic))
 
 (defun nx1-ff-call-internal (context address-expression arg-specs-and-result-spec operator )
   (declare (ignorable context))

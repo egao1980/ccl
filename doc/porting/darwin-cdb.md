@@ -17,7 +17,16 @@ treat Cocoa / `#_` record layouts as unverified on arm64.
 
 ## Regenerate (outline)
 
-1. Clone/build `ccl-ffigen` (`ffigen5` + `Makefile.darwin`, Xcode libclang).
+1. Build `ccl-ffigen/ffigen5` with `Makefile.darwin` (Xcode or CLT
+   `libclang`). Copy `clang/include/clang-c` from llvm-project into
+   `ffigen5/include/clang-c` first (Homebrew llvm often lacks them):
+   ```
+   git clone --depth 1 --filter=blob:none --sparse \
+     https://github.com/llvm/llvm-project.git /tmp/llvm-clang-c
+   cd /tmp/llvm-clang-c && git sparse-checkout set clang/include/clang-c
+   mkdir -p ffigen5/include && cp -R clang/include/clang-c ffigen5/include/
+   make -C ffigen5 -f Makefile.darwin
+   ```
 2. Add `darwin-arm64-headers/<module>/C/{translate,populate}.sh` modeled
    on `darwin-x86-headers64` but with `-arch arm64` and the current
    `MacOSX.sdk` (not MacOSX10.11 + `-m64`).
@@ -28,6 +37,8 @@ treat Cocoa / `#_` record layouts as unverified on arm64.
    → writes `.cdb` under `ccl:darwin-arm64-headers;`.
 
 `ccl-ffigen/arm64-headers/` today is **Linux** aarch64, not Darwin.
+Variadic markers (`:void` → `:variadic` sentinel) already work with the
+x86-copy CDBs for `printf` / `snprintf`.
 
 ## Smoke after regen
 

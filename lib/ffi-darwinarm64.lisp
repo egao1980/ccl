@@ -13,11 +13,12 @@
 ;;; %MAKE-RWLOCK-PTR then did `mov xN,rnil` + trap-unless-macptr.
 
 ;;; Reuse Linux AAPCS64 callback generators until Darwin-specific
-;;; packing is wired.  Fixed-arity stack overflow (GPR 9+) is handled
-;;; by _SPffcall + arm642-aapcs64-ff-call.  Still TODO here: Apple
-;;; variadic-on-stack (all `...` args on the stack; needs prototype /
-;;; CDB) and natural-size stack packing for odd-sized non-variadic
-;;; overflow.  Ensures ARM64-LINUX package + definitions exist when
+;;; natural-size stack packing for non-variadic overflow is wired.
+;;; Fixed-arity stack overflow (GPR 9+) is handled by _SPffcall +
+;;; arm642-aapcs64-ff-call.  Darwin variadic-on-stack: `%external-call-
+;;; expander` emits a `:variadic` sentinel at the CDB `:void` boundary;
+;;; aapcs64-ff-call then forces following args onto 8-byte stack slots
+;;; (Apple ABI).  Ensures ARM64-LINUX package + definitions exist when
 ;;; only Darwin is loaded.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (unless (find-package "ARM64-LINUX")
@@ -33,9 +34,9 @@
                                         #'null-coerce-foreign-arg)
                                        (result-coerce
                                         #'null-coerce-foreign-result))
-  ;; Shared AAPCS64 path for now.  Darwin-only: variadic args all on
-  ;; stack, natural-size stack packing, signed-char — needed for libc
-  ;; varargs later; kernel-import cold-load calls are fixed-arity.
+  ;; Shared AAPCS64 path.  Darwin variadic-on-stack is handled in
+  ;; arm642-aapcs64-ff-call via the :variadic sentinel from
+  ;; %external-call-expander (CDB :void boundary).
   (arm64::expand-ff-call callform args
                          :arg-coerce arg-coerce
                          :result-coerce result-coerce))

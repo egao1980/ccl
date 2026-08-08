@@ -438,8 +438,9 @@
                                 (arg-coerce #'null-coerce-foreign-arg)
                                 (result-coerce #'null-coerce-foreign-result))
   "Shared AAPCS64 ff-call expander (Linux + Darwin).
-Darwin variadic/stack-packing divergences are not handled here yet —
-cold-load / kernel-import calls are fixed-arity."
+Darwin variadic-on-stack is enforced in aapcs64-ff-call when a
+`:variadic` sentinel (from `%external-call-expander` at the CDB
+`:void` boundary) appears in the arg list."
   (let* ((result-type-spec (or (car (last args)) :void)))
     (multiple-value-bind (result-type error)
         (ignore-errors (parse-foreign-type result-type-spec))

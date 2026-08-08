@@ -215,9 +215,12 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
   the c_frame after return (callee frames clobber below SP). When
   bumping, `last_lisp_frame` is the boundary lisp_frame (above the new
   SP), not the c_frame base.
-* Still open: Darwin **variadic-on-stack** (Apple ABI: `...` args all
-  on the stack; needs prototype-aware `expand-ff-call` / CDB); natural-
-  size packing for non-variadic stack overflow of odd-sized types.
+* **Darwin variadic-on-stack:** done. `%external-call-expander` emits a
+  `:variadic` sentinel at the CDB `:void` boundary; `aapcs64-ff-call`
+  forces following args onto 8-byte stack slots (Apple ABI). Linux
+  ignores the sentinel. Smoke: `tools/darwin-variadic-smoke.lisp`.
+* Still open: natural-size packing for non-variadic stack overflow of
+  odd-sized types (Darwin packs by natural alignment; AAPCS64 pads to 8).
 
 ### Smaller Darwin arm64 landmines (status)
 
