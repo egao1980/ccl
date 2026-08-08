@@ -23,8 +23,9 @@ echo ";; purify production image" | tee -a "$LOG"
 "$WT" "$TIMEOUT" ./darm64cl --no-init --batch \
   < tools/save-darwinarm64-image.lisp >>"$LOG" 2>&1
 
-echo ";; smoke" | tee -a "$LOG"
-"$WT" "$TIMEOUT" ./darm64cl --no-init --batch <<'LISP' >>"$LOG" 2>&1
+MARKER="DARWIN-DUAL-MAP-${DM}-SMOKE-OK"
+echo ";; smoke (expect $MARKER)" | tee -a "$LOG"
+"$WT" "$TIMEOUT" ./darm64cl --no-init --batch <<LISP >>"$LOG" 2>&1
 (in-package :ccl)
 (unless (eql (+ 1 2) 3) (error "arith"))
 (let* ((f (compile nil '(lambda (x) (* x x))))
@@ -34,9 +35,12 @@ echo ";; smoke" | tee -a "$LOG"
 (defun %smoke-getpid () (#_getpid))
 (unless (and (integerp (%smoke-getpid)) (> (%smoke-getpid) 0))
   (error "getpid"))
-(format t "~&DARWIN-NO-DUAL-MAP-SMOKE-OK~%")
+(format t "~&${MARKER}~%")
 (quit 0)
 LISP
 
-grep -q 'DARWIN-NO-DUAL-MAP-SMOKE-OK' "$LOG"
-echo "DARWIN-NO-DUAL-MAP-SMOKE-OK"
+grep -q "$MARKER" "$LOG"
+echo "$MARKER"
+if [ "$DM" = "0" ]; then
+  echo "DARWIN-NO-DUAL-MAP-SMOKE-OK"
+fi

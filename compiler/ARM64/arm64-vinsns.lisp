@@ -799,12 +799,12 @@
 ;;; vector as `object`).  Call scratch must NEVER be an allocatable
 ;;; arg/imm/temp-with-ABI-meaning -- v2 cont-71 class; temp0 is dead at
 ;;; every call boundary (callee prologue reads only nfn).
-;;; Darwin W^X: bias IMAGE_BASE (#x30<<40) heap code-vectors by
-;;; HEAP_EXEC_BIAS (#x40<<32) onto the RX dual-map.  MAP_JIT / pure RX
-;;; live outside that range — plain br/blr.  Predicate also in arm64-backend.
+;;; Darwin W^X: production is purify RX + MAP_JIT at the canonical VA.
+;;; HEAP_EXEC_BIAS dual-map is retired — must stay nil here (this file
+;;; loads after arm64-backend and previously overwrote its nil with t,
+;;; baking bias into every call/jump-known-* site).
 (defun darwinarm64-heap-exec-bias-p ()
-  (and *target-backend*
-       (eq (backend-name *target-backend*) :darwinarm64)))
+  nil)
 
 (define-arm64-vinsn (jump-known-symbol :jumplr) (()
                                                  ()
