@@ -670,14 +670,27 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
                  (let ((p (probe-file f)))
                    (when p (delete-file p))))
                (load "ccl:compiler;ARM64;arm64-lap.lisp"))
-          (setf (svref *fasl-dispatch-table* 2) old-faslop)
           (when old-alloc
             (setf (fdefinition '%allocate-code-vector) old-alloc))
           (when old-install
-            (setf (fdefinition '%darwinarm64-jit-install-code) old-install))
-          (setq *darwinarm64-map-jit-fasls* old-flag))))
-    (%enable-darwinarm64-map-jit-fasls)
-    (format t "~&;MAP_JIT host faslop/LAP installed~%")))
+            (setf (fdefinition '%darwinarm64-jit-install-code) old-install))))
+    ;; Leave the heap faslop installed for compile-ccl (do not restore the
+    ;; purified image's MAP_JIT faslop — reloading tip compiler fasls into
+    ;; MAP_JIT currently UDF-faults).  save-application re-enables MAP_JIT
+    ;; for the saved image.
+    (setq *darwinarm64-map-jit-fasls* nil)
+    (setf (svref *fasl-dispatch-table* 2)
+          (nfunction $fasl-code-vector
+            (lambda (s)
+              (let* ((element-count (%fasl-read-count s))
+                     (size-in-bytes (* 4 element-count))
+                     (vector (allocate-typed-vector :code-vector element-count)))
+                (declare (fixnum element-count size-in-bytes))
+                (%epushval s vector)
+                (%fasl-read-n-bytes s vector 0 size-in-bytes)
+                (%make-code-executable vector)
+                vector))))
+    (format t "~&;Host tip LAP installed (heap faslop for compile-ccl)~%")))
 
 #+darwinarm64-target
 (defun %darwinarm64-shell-quote (string)
