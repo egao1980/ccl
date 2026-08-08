@@ -139,6 +139,26 @@
                :address s
                :unsigned-fullword nbytes
                :void))
-    code-vector))
+    code-vector)
+
+  ;; Install MAP_JIT $fasl-code-vector (opcode 2) into the running image.
+  ;; Level-0 nfasload is not reloaded during compile-ccl, so without this
+  ;; first rebuild-ccl keeps the heap faslop and pays NX-per-call on every
+  ;; loaded fasl.  Same approach as exposing the helpers above: arm64env
+  ;; loads before arm64-lap / the bulk of the rebuild.
+  (setf (svref *fasl-dispatch-table* 2)
+        (nfunction $fasl-code-vector
+          (lambda (s)
+            (let* ((element-count (%fasl-read-count s))
+                   (size-in-bytes (* 4 element-count))
+                   (vector (%allocate-code-vector element-count)))
+              (declare (fixnum element-count size-in-bytes))
+              (%epushval s vector)
+              (let ((scratch (make-array size-in-bytes
+                                         :element-type '(unsigned-byte 8))))
+                (%fasl-read-n-bytes s scratch 0 size-in-bytes)
+                (%darwinarm64-jit-install-code vector scratch size-in-bytes))
+              vector))))
+  )
 
 (provide "ARM64ENV")
