@@ -9794,7 +9794,7 @@
 
 (defarm642 arm642-with-variable-c-frame with-variable-c-frame (seg vreg xfer size body &aux
                                                                    (old-stack (arm642-encode-stack)))
-  (let* ((reg (arm642-one-untargeted-reg-form seg size arm64::arg_z)))
+  (let* ((reg (arm642-one-untargeted-reg-form seg size ($ arm64::arg_z))))
     (! alloc-variable-c-frame reg)
     (arm642-open-undo $undo-arm64-c-frame)
     (arm642-undo-body seg vreg xfer body old-stack)))
