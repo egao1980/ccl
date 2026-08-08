@@ -73,9 +73,13 @@ cp "${HERE}/objc-msgsend-prototypes.ffi" ./zzz-objc-msgsend-prototypes.ffi
 # instancetype, va_list, NSConstantString layout for objc-bridge.
 cp "${HERE}/objc-bridge-types.ffi" ./zzz-objc-bridge-types.ffi
 
+# Protocol class (missing from modern SDK cocoa CDB).
+cp "${HERE}/objc-protocol-class.ffi" ./zzz-objc-protocol-class.ffi
+
 echo ";; cocoa-populate done under $(pwd)"
 echo ";; objc-class count:" "$(grep -h '^(objc-class ' $(find . -name '*.ffi') 2>/dev/null | wc -l)"
 echo ";; objc-instance-method count:" "$(grep -h '^(objc-instance-method ' $(find . -name '*.ffi') 2>/dev/null | wc -l)"
 echo ";; installed objc-bool-constants.ffi (YES/NO)"
 echo ";; installed zzz-objc-msgsend-prototypes.ffi"
 echo ";; installed zzz-objc-bridge-types.ffi"
+echo ";; installed zzz-objc-protocol-class.ffi"

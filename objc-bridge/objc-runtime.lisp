@@ -1701,64 +1701,35 @@ argument lisp string."
   )
 
   
-;;; Darwin/arm64 ObjC varargs: messaging uses the register ABI (not C
-;;; variadic-on-stack).  Pack static typed args + &rest into the same
-;;; argbuf layout %ff-call / %do-ff-call use.
+;;; Darwin/arm64 ObjC *method* varargs: fixed args (self/SEL/typed) use
+;;; the register ABI; the method's `...` args are Darwin stack-only
+;;; (Apple AAPCS64).  Always park &rest in the argbuf overflow/stack
+;;; region — never consume remaining GPR/FPR slots.
 #+(and apple-objc-2.0 arm64-target)
 (defun %process-varargs-list (argbuf gpr-offset other-offset n-gpr-args
                               fp-args n-fp-args rest-arg)
+  (declare (ignore gpr-offset n-gpr-args fp-args n-fp-args))
   (dolist (arg-temp rest-arg)
     (typecase arg-temp
       (double-float
-       (cond ((< n-fp-args 8)
-              (setf (%get-double-float fp-args (* n-fp-args 8)) arg-temp)
-              (incf n-fp-args))
-             (t
-              (setf (%get-double-float argbuf other-offset) arg-temp)
-              (incf other-offset 8)
-              (incf n-fp-args))))
+       (setf (%get-double-float argbuf other-offset) arg-temp)
+       (incf other-offset 8))
       (single-float
-       (cond ((< n-fp-args 8)
-              (setf (%get-single-float fp-args (* n-fp-args 8)) arg-temp)
-              (incf n-fp-args))
-             (t
-              (setf (%get-single-float argbuf other-offset) arg-temp)
-              (incf other-offset 8)
-              (incf n-fp-args))))
+       (setf (%get-single-float argbuf other-offset) arg-temp)
+       (incf other-offset 8))
       (macptr
-       (incf n-gpr-args)
-       (cond ((<= n-gpr-args 8)
-              (setf (%get-ptr argbuf gpr-offset) arg-temp)
-              (incf gpr-offset 8))
-             (t
-              (setf (%get-ptr argbuf other-offset) arg-temp)
-              (incf other-offset 8))))
+       (setf (%get-ptr argbuf other-offset) arg-temp)
+       (incf other-offset 8))
       ((unsigned-byte 64)
-       (incf n-gpr-args)
-       (cond ((<= n-gpr-args 8)
-              (setf (%%get-unsigned-longlong argbuf gpr-offset) arg-temp)
-              (incf gpr-offset 8))
-             (t
-              (setf (%%get-unsigned-longlong argbuf other-offset) arg-temp)
-              (incf other-offset 8))))
+       (setf (%%get-unsigned-longlong argbuf other-offset) arg-temp)
+       (incf other-offset 8))
       ((signed-byte 64)
-       (incf n-gpr-args)
-       (cond ((<= n-gpr-args 8)
-              (setf (%%get-signed-longlong argbuf gpr-offset) arg-temp)
-              (incf gpr-offset 8))
-             (t
-              (setf (%%get-signed-longlong argbuf other-offset) arg-temp)
-              (incf other-offset 8))))
+       (setf (%%get-signed-longlong argbuf other-offset) arg-temp)
+       (incf other-offset 8))
       (t
-       ;; fixnums / other integers
-       (incf n-gpr-args)
-       (cond ((<= n-gpr-args 8)
-              (setf (%%get-signed-longlong argbuf gpr-offset) arg-temp)
-              (incf gpr-offset 8))
-             (t
-              (setf (%%get-signed-longlong argbuf other-offset) arg-temp)
-              (incf other-offset 8))))))
-  (values gpr-offset other-offset n-gpr-args n-fp-args))
+       (setf (%%get-signed-longlong argbuf other-offset) arg-temp)
+       (incf other-offset 8))))
+  other-offset)
 
 #+(and apple-objc-2.0 arm64-target)
 (defun %compile-varargs-send-function-for-signature (sig)
@@ -1880,20 +1851,8 @@ argument lisp string."
                 (n-gpr-args 0)
                 (n-fp-args 0)
                 (n-overflow 0)
-                (extra-gprs 0)
-                (extra-fprs 0)
-                (extra-overflow 0))
-           ;; Size &rest for frame allocation.
-           (dolist (a ,rest-arg)
-             (if (or (typep a 'double-float) (typep a 'single-float))
-               (progn
-                 (incf extra-fprs)
-                 (when (> (+ ,n-static-fprs extra-fprs) 8)
-                   (incf extra-overflow)))
-               (progn
-                 (incf extra-gprs)
-                 (when (> (+ ,n-static-gprs extra-gprs) 8)
-                   (incf extra-overflow)))))
+                ;; Method `...` args are stack-only on Darwin/arm64.
+                (extra-overflow (length ,rest-arg)))
            (let* ((total-overflow (+ ,n-static-overflow extra-overflow))
                   (total-words (+ 8 total-overflow)))
              (%stack-block ((,fp-args (* 8 8))

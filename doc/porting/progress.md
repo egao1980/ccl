@@ -14,11 +14,10 @@
   `tools/darwin-objc-bridge-smoke.lisp`): skip `:variadic` for `objc_msgSend*`;
   aapcs64 N-word; exception globals via `%set-kernel-global-ptr-from-offset`;
   cocoa CDB shims (`YES`/`NO`, msgsend prototypes, `instancetype`/generics/
-  `struct id`, NSConstantString); `initialized-nsobject-p` → `:objc_object`;
-  soft `ns:protocol` printer when Protocol absent from modern objc-classes.cdb.
+  soft id`, NSConstantString); `initialized-nsobject-p` → `:objc_object`.
 * **N-word/varargs ungated** (lazy `objc-method-signature-info` compile).
   ≤128-bit records expand to N× `:unsigned-doubleword`/`%%get-unsigned-longlong`
-  (CCL x8664-shaped). `#/stringWithFormat:` (varargs) still SIGSEGVs.
+  (CCL x8664-shaped).
 * **substring heisenbug = Apple arm64 tagged pointers**, not N-word RA:
   `tagged-objc-instance-p` used x86 low-nibble test; arm64 uses bit 63.
   Short NSStrings failed `recognize-objc-object` all-or-nothing per process.
@@ -29,8 +28,16 @@
   `(paref … (:* :char) 1)` — byte index, smashes `argv[0]`. Symptom:
   intermittent `os_unfair_lock_lock` SIGSEGV in Cocoa `dlopen`
   (fault ≈ `cs_area.high+0x4c10`). Fix: `(:* (:* :char))` like `jni.lisp`.
-  Still open: Darwin variadic send; Protocol CDB inject; arm64 `%throw` /
-  `objc-propagate-throw` parity (warnings only on success path).
+* **Open-issue batch (tip; bake with unbiased rebuild):**
+  - Darwin method varargs: AAPCS64 stack-only after fixed args
+    (`%process-varargs-list` / send compiler) — `#/stringWithFormat:` OK.
+  - Protocol: `%ensure-class-declaration` + CDB inject scaffolding;
+    `ns:protocol` printer always defined.
+  - arm64 `%throw` LAP; `%throwing-through-cleanup-p` (nthrow1value via
+    tsp nodes=4; nthrowvalues via consecutive savefn=0); lazy ObjC
+    callback trampoline + `objc-propagate-throw`.
+  - Smoke: `tools/darwin-open-issues-smoke.lisp`,
+    `tools/throwing-cleanup-smoke.lisp`.
 
 ## August 2026 — Darwin/arm64 boot image (egao1980)
 

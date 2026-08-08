@@ -160,6 +160,10 @@
       (setq nclasses 0))))
 
 (register-objc-class-decls)
+;;; Modern cocoa CDBs omit Protocol (only NSURLProtocol / …).  Without a
+;;; declaration install-foreign-objc-class keeps it private and never
+;;; exports ns:protocol.  Declare it like x86 CDB did.
+(%ensure-class-declaration "Protocol" "NSObject")
 (maybe-map-objc-classes t)
 
 
@@ -374,6 +378,70 @@
   nil)
 
 
+)
+
+#+arm64-target
+(progn
+;;; Callback-frame survivors after .SPcallback exit (arm64-arch.lisp):
+;;;   CBF+0 = x0, CBF+8 = x1, CBF-64 = d0, foreign LR at CBF-152.
+;;; Trampoline: fmov x16,d0; mov lr,x1; br x16 — x0 already holds the
+;;; NSException / encapsulated throw.  Built lazily (defloadvar +
+;;; makedataexecutable during OBJC-SUPPORT load SEGV'd on darwinarm64).
+(defvar *arm64-objc-callback-error-return-trampoline* nil)
+
+(defun %arm64-objc-callback-error-return-trampoline ()
+  (or *arm64-objc-callback-error-return-trampoline*
+      (setq *arm64-objc-callback-error-return-trampoline*
+            (let* ((code-words '(#x9e670010      ; fmov x16, d0
+                                 #xaa0103fe      ; mov lr, x1
+                                 #xd61f0200))    ; br x16
+                   (nbytes (* 4 (length code-words)))
+                   (ptr (%allocate-callback-pointer 16)))
+              #+(and darwin-target arm64-target)
+              (%darwin-jit-write-protect nil)
+              (do* ((i 0 (+ i 4))
+                    (words code-words (cdr words)))
+                   ((null words))
+                (setf (%get-unsigned-long ptr i) (car words)))
+              #+(and darwin-target arm64-target)
+              (%darwin-jit-write-protect t)
+              (ff-call (%kernel-import #.arm64::kernel-import-makedataexecutable)
+                       :address ptr
+                       :unsigned-fullword nbytes
+                       :void)
+              ptr))))
+
+(defun %arm64-objc-exception-throw-bits ()
+  (let* ((addr (%reference-external-entry-point
+                (load-time-value (external "_objc_exception_throw")))))
+    (cond ((typep addr 'fixnum) addr)
+          ((macptrp addr) (%ptr-to-int addr))
+          (t (error "Unexpected _objc_exception_throw entry ~s" addr)))))
+
+(defun objc-callback-error-return (condition return-value-pointer return-address-pointer)
+  (process-debug-condition *current-process* condition (%get-frame-ptr))
+  (setf (%get-ptr return-value-pointer 0) (ns-exception condition)
+        (%get-ptr return-value-pointer 8) (%get-ptr return-address-pointer 0)
+        (%get-ptr return-address-pointer 0) (%arm64-objc-callback-error-return-trampoline))
+  (let* ((addr (%arm64-objc-exception-throw-bits)))
+    (if (< addr 0)
+      (setf (%%get-signed-longlong return-value-pointer
+                                   #.arm64::callback-frame.fp-save-offset) addr)
+      (setf (%%get-unsigned-longlong return-value-pointer
+                                     #.arm64::callback-frame.fp-save-offset) addr)))
+  nil)
+
+(defun objc-propagate-throw (throw-info return-value-pointer return-address-pointer)
+  (setf (%get-ptr return-value-pointer 0) (encapsulate-throw-info throw-info)
+        (%get-ptr return-value-pointer 8) (%get-ptr return-address-pointer 0)
+        (%get-ptr return-address-pointer 0) (%arm64-objc-callback-error-return-trampoline))
+  (let* ((addr (%arm64-objc-exception-throw-bits)))
+    (if (< addr 0)
+      (setf (%%get-signed-longlong return-value-pointer
+                                   #.arm64::callback-frame.fp-save-offset) addr)
+      (setf (%%get-unsigned-longlong return-value-pointer
+                                     #.arm64::callback-frame.fp-save-offset) addr)))
+  nil)
 )
 
 #+x8632-target
@@ -763,19 +831,16 @@ NSObjects describe themselves in more detail than others."
   (augment-objc-interfaces interfaces-name interfaces-dir))
 
                       
-;; Modern cocoa CDBs omit Protocol; install-foreign-objc-class then
-;; keeps it private and never exports ns:protocol.  Only define the
-;; printer when the class was actually mapped.
+;; Protocol is declared via %ensure-class-declaration (and CDB inject)
+;; so ns:protocol is exported on darwinarm64 too.
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (export (intern "PROTOCOL" "NS") "NS"))
 
-(eval-when (:load-toplevel :execute)
-  (when (find-class 'ns:protocol nil)
-    (defmethod print-object ((p ns:protocol) stream)
-      (print-unreadable-object (p stream :type t)
-        (format stream "~a (#x~x)"
-                (%get-cstring (#/name p))
-                (%ptr-to-int p))))))
+(defmethod print-object ((p ns:protocol) stream)
+  (print-unreadable-object (p stream :type t)
+    (format stream "~a (#x~x)"
+            (%get-cstring (#/name p))
+            (%ptr-to-int p))))
 
                                          
 (defmethod terminate ((instance objc:objc-object))

@@ -96,7 +96,18 @@
   (unless (equal cstr "bcd")
     (error "substringWithRange: => ~s" cstr)))
 
-(format t "~&format=SKIPPED (varargs pending)~%")
+(let* ((fmt (%make-nsstring "%d-%@"))
+       (arg (%make-nsstring "ok"))
+       (formatted (#/stringWithFormat: ns:ns-string fmt 1 arg))
+       (cstr (%get-cstring (#/UTF8String formatted))))
+  (format t "~&format=~s~%" cstr)
+  (finish-output)
+  (unless (equal cstr "1-ok")
+    (error "stringWithFormat: => ~s" cstr)))
+
+(unless (find-class 'ns:protocol nil)
+  (error "ns:protocol class missing"))
+(format t "~&protocol-class=~s~%" (find-class 'ns:protocol nil))
 (finish-output)
 
 (format t "~&DARWIN-OBJC-BRIDGE-SMOKE-OK~%")

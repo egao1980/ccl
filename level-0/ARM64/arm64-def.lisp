@@ -897,3 +897,13 @@
                  (:signed-doubleword (%get-signed-natural result-buf 0))
                  (:single-float (%get-single-float result-buf 8))
                  (:double-float (%get-double-float result-buf 8)))))))))))
+
+;;; %throw — Lisp-callable wrapper around .SPthrow (x8664 twin in
+;;; level-0/X86/x86-def.lisp).  Caller: (apply #'%throw tag values…).
+;;; nargs on entry counts tag+values; SPthrow wants nargs = nvalues with
+;;; tag at (vsp+nargs).  Missing-tag errors are handled inside .SPthrow.
+(defarm64lapfunction %throw ()
+  (:arglist (&rest args))
+  (vpush-argregs)
+  (sub nargs nargs (:$ '1))
+  (jump-subprim .SPthrow))
