@@ -75,8 +75,9 @@ cold load and reaches the listener (`DarwinARM6464`). Smoke:
 handler made every lisp→lisp call cost one Mach signal (~1µs→ms).
 Fix: add `HEAP_EXEC_BIAS` before `br`/`blr` to code-vectors in
 `spentry-D` (`br_codevector`), `call/jump-known-{symbol,function}`
-vinsns, and LAP `br-codevector`. Funcall microbench: 3.2s/1e6 → 2.5ms.
-Rebuild boot/full image so library code (format/CLOS) picks up vinsns.
+vinsns, and LAP `br-codevector`. After rebuild: funcall 1e6 ~2.5ms
+(was ~3.2s); `format`/`make-hash-table` string keys / CLOS match
+Rosetta. Rebuild: bootstrap boot image + `save-application` `:purify nil`.
 
 
 Cross-runtime JIT survey (LuaJIT / V8 / JSC / CPython / PyPy) in
