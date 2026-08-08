@@ -439,8 +439,15 @@
   "Shared AAPCS64 ff-call expander (Linux + Darwin).
 Darwin variadic-on-stack is enforced in aapcs64-ff-call when a
 `:variadic` sentinel (from `%external-call-expander` at the CDB
-`:void` boundary) appears in the arg list."
-  (let* ((result-type-spec (or (car (last args)) :void)))
+`:void` boundary) appears in the arg list.
+
+Records of ≤128 bits are expanded to N `:unsigned-doubleword`
+`%%get-unsigned-longlong` loads (same shape as x8664 integer-in-GPR
+records).  That path uses the proven getu64/`set-c-arg` codegen;
+passing a bare macptr as an N-word argspec was a heisenbug on Darwin
+arm64 (stable-wrong return across a process, flaky across ASLR)."
+  (let* ((result-type-spec (or (car (last args)) :void))
+         (structure-arg-temp nil))
     (multiple-value-bind (result-type error)
         (ignore-errors (parse-foreign-type result-type-spec))
       (if error
@@ -473,8 +480,18 @@ Darwin variadic-on-stack is enforced in aapcs64-ff-call when a
                            (argforms :unsigned-doubleword)
                            (argforms `(%%get-unsigned-longlong ,arg-value-form 0)))
                           ((<= bits 128)
-                           (argforms (ceiling bits 64))
-                           (argforms arg-value-form))
+                           ;; Homogeneous integer record in GPRs (e.g. NSRange).
+                           ;; Bind once so multi-word loads share the same macptr.
+                           (unless structure-arg-temp
+                             (setq structure-arg-temp (gensym)))
+                           (let* ((nwords (ceiling bits 64))
+                                  (valform `(%setf-macptr ,structure-arg-temp
+                                                          ,arg-value-form)))
+                             (dotimes (i nwords)
+                               (argforms :unsigned-doubleword)
+                               (argforms `(%%get-unsigned-longlong ,valform
+                                            ,(* i 8)))
+                               (setq valform structure-arg-temp))))
                           (t
                            (argforms :address)
                            (argforms arg-value-form))))
@@ -482,7 +499,14 @@ Darwin variadic-on-stack is enforced in aapcs64-ff-call when a
                     (argforms (foreign-type-to-representation-type ftype))
                     (argforms (funcall arg-coerce arg-type-spec arg-value-form))))))))
         (argforms (foreign-type-to-representation-type result-type))
-        (funcall result-coerce result-type-spec `(,@callform ,@(argforms)))))))
+        (let ((call (funcall result-coerce result-type-spec
+                             `(,@callform ,@(argforms)))))
+          (if structure-arg-temp
+            `(let* ((,structure-arg-temp (%null-ptr)))
+               (declare (dynamic-extent ,structure-arg-temp)
+                        (type macptr ,structure-arg-temp))
+               ,call)
+            call)))))))
 
 ;;; A resident (native) arm64 compiler is DEMAND-LOADED module by module,
 ;;; not dumped into the image the way the ppc/x86 ones are, so nothing pulls

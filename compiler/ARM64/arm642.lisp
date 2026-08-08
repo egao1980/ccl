@@ -9270,16 +9270,16 @@
                                  (incf gpr-offset))
                                 (t
                                  (store-overflow-gpr ptr spec)))))))
-                ;; N-word memory structs (expand-ff-call emits N for
-                ;; 64<bits≤128): load N consecutive doublewords from the
-                ;; macptr into consecutive GPRs (then overflow).
-                ;; Explicit deref-macptr — do not rely on RA/type inference
-                ;; to unbox; tagged macptr-as-address reads lisp headers
-                ;; and objc_msgSend returns garbage (heisenbug).
+                ;; N-word memory structs (unsigned-byte argspec): load N
+                ;; consecutive doublewords from the macptr into consecutive
+                ;; GPRs (then overflow).  Match x8664: evaluate the macptr
+                ;; form straight into an :address temp (one-targeted does
+                ;; trap-unless-macptr + deref).  Evaluating into arg_z then
+                ;; deref-macptr was ASLR-flaky on Darwin (wrong pointer
+                ;; stable within a process).
                 ((typep spec 'unsigned-byte)
-                 (arm642-one-targeted-reg-form seg valform ($ arm64::arg_z))
                  (with-imm-target () (ptr :address)
-                   (! deref-macptr ptr ($ arm64::arg_z))
+                   (arm642-one-targeted-reg-form seg valform ptr)
                    (with-imm-target (ptr) (r :u64)
                      (dotimes (i spec)
                        (! mem-ref-c-doubleword r ptr
