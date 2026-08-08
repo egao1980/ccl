@@ -406,6 +406,10 @@
     (:pointer (list :pointer (reference-ffi-type (cadr spec))))
     (:array (list :array (cadr spec) (reference-ffi-type (caddr spec))))
     (:void *ffi-void-reference*)
+    ;; ffigen5 emits (null ()) for unmapped clang kinds (Half/Float16).
+    ;; Prefer skipping the enclosing function (see parse-ffi handler-case);
+    ;; if one leaks through, treat as void rather than ecase failure.
+    (:null *ffi-void-reference*)
     (t
      (list :primitive
            (ecase (car spec)
@@ -768,7 +772,13 @@
                   :objc-protocol-instance-method
                   )
                  (process-ffi-objc-method form))
-                (:function (push (process-ffi-function form) defined-functions))
+                (:function
+                 (handler-case
+                     (push (process-ffi-function form) defined-functions)
+                   (error (c)
+                     ;; Darwin/ffigen5: CXType_Half/__fp16 → "(null ())"; skip.
+                     (warn "parse-ffi: skipping function ~s: ~a"
+                           (cadr form) c))))
                 (:macro (let* ((m (process-ffi-macro form))
                                (args (ffi-macro-args m)))
                           (if args

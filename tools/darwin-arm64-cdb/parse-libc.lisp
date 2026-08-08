@@ -1,16 +1,16 @@
 ;;;; Parse libc .ffi → *.cdb under ccl:darwin-arm64-headers;libc;
 ;;;;
-;;;;   # BACK UP first — install-new-db-files replaces *.cdb in place
 ;;;;   cp darwin-arm64-headers/libc/*.cdb /tmp/libc-cdb-backup/
 ;;;;   ./darm64cl --stack-size 16M --thread-stack-size 16M --no-init --batch \
 ;;;;     < tools/darwin-arm64-cdb/parse-libc.lisp
 ;;;;
-;;;; Prefer tools/darwin-arm64-cdb/libc-populate.sh (full) over core-only.
-;;;; Skip math.h (see libc-populate.sh) — its .ffi overflows the FFI reader.
-;;;; Until counts match bring-up, restore the x86-copy CDB after validating.
+;;;; Reloads parse-ffi.lisp so Availability/(null) skip fixes apply even
+;;;; when the image predates them.  math.h is included via libc-populate.sh
+;;;; + filter-ffi.py.
 (in-package :ccl)
-(require "PARSE-FFI")
+(setq *warn-if-redefine-kernel* nil)
+(load "library/parse-ffi.lisp")
 (format t "~&;; parse-standard-ffi-files \"libc\"~%")
 (parse-standard-ffi-files "libc")
 (format t "~&;; PARSE-LIBC-OK~%")
-(quit)
+(quit 0)

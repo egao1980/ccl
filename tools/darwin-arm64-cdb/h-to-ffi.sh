@@ -58,3 +58,7 @@ if ! "$FFIGEN" $CFLAGS $other_flags -x c $includes "$header" -o "$output_path"; 
   rm -f "$output_path"
   exit 0
 fi
+HERE=$(cd "$(dirname "$0")" && pwd)
+if [ -f "$HERE/filter-ffi.py" ] && [ -f "$output_path" ]; then
+  python3 "$HERE/filter-ffi.py" "$output_path"
+fi

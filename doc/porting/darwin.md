@@ -198,9 +198,10 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
 * Backend expects `ccl:darwin-arm64-headers;`.  The tree is **gitignored**
   (`/*headers/`) like every other `*headers*` directory.
 * **libc** regenerated for arm64 (`tools/darwin-arm64-cdb/libc-populate.sh`,
-  current MacOSX.sdk, `-arch arm64`).  Critical layouts match C
-  `sizeof`.  Cocoa / other modules may still be the x86 bring-up copy.
-  See `doc/porting/darwin-cdb.md`.
+  current MacOSX.sdk, `-arch arm64`), including **math.h** via
+  `filter-ffi.py` (Availability macros + `(null)` / Half types).
+  Cocoa populate script exists; full umbrella parse still too heavy —
+  keep x86-copy cocoa CDB for now.  See `doc/porting/darwin-cdb.md`.
 
 ### Apple AAPCS64 FFI
 

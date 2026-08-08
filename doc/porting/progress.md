@@ -111,8 +111,9 @@ Still open for Darwin: full dual-map removal after purified images
 `tools/run-darwin-purify-smoke.sh` — but fasl cold-load still dual-maps
 IMAGE_BASE code, so production save stays `:purify nil`); true ASLR
 rnil-relative statics (provisional FIXED `STATIC_BASE` remains); Cocoa
-and other interface modules still need arm64 populate (libc regen
-landed — see `doc/porting/darwin-cdb.md`).
+umbrella CDB regen (populate+filter works; full `Cocoa.h` parse still
+too heavy — keep x86-copy until sliced).  libc arm64 regen includes
+**math.h** (Availability filter + Half/Float16 handling).
 `_SPffcall` stack-arg SP bump (GPR 9+), Darwin variadic-on-stack
 (`:variadic` sentinel), and Darwin natural-size packing for
 non-variadic stack overflow landed.  MAP_JIT code heap + conditional

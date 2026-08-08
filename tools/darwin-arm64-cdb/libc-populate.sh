@@ -202,8 +202,7 @@ h-to-ffi.sh ${SDK}/usr/include/mach_debug/page_info.h
 h-to-ffi.sh ${SDK}/usr/include/mach_debug/vm_info.h
 h-to-ffi.sh ${SDK}/usr/include/mach_debug/zone_info.h
 h-to-ffi.sh ${SDK}/usr/include/malloc/malloc.h
-# SKIP: Apple math.h → huge .ffi; parse-ffi stack-overflows (reader)
-#h-to-ffi.sh ${SDK}/usr/include/math.h
+h-to-ffi.sh ${SDK}/usr/include/math.h
 h-to-ffi.sh ${SDK}/usr/include/memory.h
 h-to-ffi.sh ${SDK}/usr/include/monitor.h
 h-to-ffi.sh ${SDK}/usr/include/nameser.h
