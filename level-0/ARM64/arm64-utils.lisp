@@ -869,6 +869,12 @@ be somewhat larger than what was specified)."
 #+(and darwinarm64-target)
 (progn
 
+;;; When NIL (cold-load / pre-purify), $fasl-code-vector uses the heap so
+;;; code is purifyable and lisp never lives in MAP_JIT (calling
+;;; pthread_jit_write_protect_np from MAP_JIT-resident lisp suicides).
+;;; Set T after purify / on the rebuild host for runtime fasl+LAP.
+(defvar *darwinarm64-map-jit-fasls* nil)
+
 (defvar *jit-code-base* nil)
 (defvar *jit-code-limit* nil)
 (defvar *jit-code-free* nil)

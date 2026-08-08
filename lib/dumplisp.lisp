@@ -98,6 +98,14 @@
   ;; warnings object in the image; compile-file then never signals
   ;; undefined-type/function warnings (darwinarm64 bring-up hit this).
   (setq *outstanding-deferred-warnings* nil)
+  ;; Darwin/arm64: enable MAP_JIT fasl loads for the *saved* image.  All
+  ;; cold-load fasls are already on the heap (flag was NIL); purify will
+  ;; walk them.  Future require/compile after restart uses MAP_JIT.
+  #+darwinarm64-target
+  (progn
+    (unless (fboundp '%enable-darwinarm64-map-jit-fasls)
+      (require "ARM64ENV"))
+    (%enable-darwinarm64-map-jit-fasls))
   (let* ((ip *initial-process*)
 	 (cp *current-process*))
     (when (process-verify-quit ip)

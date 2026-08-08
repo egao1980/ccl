@@ -625,9 +625,9 @@ loaded fasl (same approach as the surgical faslop bootstrap)."
         (*save-source-locations* nil)
         (*warn-if-redefine-kernel* nil))
     (format t "~&;Installing Darwin/arm64 MAP_JIT fasl loader into host image~%")
-    ;; arm64env: fill missing helpers + install faslop (does not clobber
-    ;; existing %jit-wp / %allocate-code-vector from the running image).
+    ;; Helpers (no faslop install at load — that is gated for cold-load).
     (load "ccl:lib;arm64env.lisp")
+    (%enable-darwinarm64-map-jit-fasls)
     ;; Tip LAP: assemble into heap scratch, C-blit into MAP_JIT.
     (load "ccl:compiler;ARM64;arm64-lap.lisp")
     (format t "~&;MAP_JIT host faslop/LAP installed~%")))

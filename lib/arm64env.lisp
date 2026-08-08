@@ -80,18 +80,21 @@
 
 (defconstant $undo-arm64-c-frame 16)
 
-;;; Darwin/arm64 MAP_JIT helpers must be visible to the compiler modules
-;;; (arm64-lap loads after arm64env during rebuild-ccl).  Level-0
-;;; arm64-utils keeps the same definitions for the boot image / cold-load.
+;;; Darwin/arm64 MAP_JIT helpers for the compiler (arm64-lap loads after
+;;; arm64env).  Level-0 arm64-utils owns the same defs for the boot image.
+;;; Do not redefine live helpers (old LAP + %jit-wp mid-rebuild SEGVs).
 ;;;
-;;; Do NOT redefine helpers that already exist in the running image: old LAP
-;;; may call %jit-wp across lisp, and swapping it mid-rebuild SEGVs.  Only
-;;; fill gaps, then install the MAP_JIT faslop (see also rebuild-ccl).
+;;; Do NOT install the MAP_JIT faslop at arm64env load time: during cold-load
+;;; that would put later fasls (and WP helpers) into MAP_JIT before purify.
+;;; rebuild-ccl / save-application call %enable-darwinarm64-map-jit-fasls.
 #+(and darwinarm64-target)
 (progn
   (defvar *jit-code-base* nil)
   (defvar *jit-code-limit* nil)
   (defvar *jit-code-free* nil)
+
+  (unless (boundp '*darwinarm64-map-jit-fasls*)
+    (defvar *darwinarm64-map-jit-fasls* nil))
 
   (unless (fboundp '%jit-wp)
     (defun %jit-wp (on)
@@ -150,23 +153,24 @@
                  :void))
       code-vector))
 
-  ;; Install MAP_JIT $fasl-code-vector (opcode 2) into the running image.
-  ;; Level-0 nfasload is not reloaded during compile-ccl, so without this
-  ;; first rebuild-ccl keeps the heap faslop and pays NX-per-call on every
-  ;; loaded fasl.
-  (setf (svref *fasl-dispatch-table* 2)
-        (nfunction $fasl-code-vector
-          (lambda (s)
-            (let* ((element-count (%fasl-read-count s))
-                   (size-in-bytes (* 4 element-count))
-                   (vector (%allocate-code-vector element-count)))
-              (declare (fixnum element-count size-in-bytes))
-              (%epushval s vector)
-              (let ((scratch (make-array size-in-bytes
-                                         :element-type '(unsigned-byte 8))))
-                (%fasl-read-n-bytes s scratch 0 size-in-bytes)
-                (%darwinarm64-jit-install-code vector scratch size-in-bytes))
-              vector))))
+  (defun %enable-darwinarm64-map-jit-fasls ()
+    "Install MAP_JIT $fasl-code-vector for subsequent loads.  Safe only once
+cold-load is done (purified image) or on a rebuild host before compile-ccl."
+    (setq *darwinarm64-map-jit-fasls* t)
+    (setf (svref *fasl-dispatch-table* 2)
+          (nfunction $fasl-code-vector
+            (lambda (s)
+              (let* ((element-count (%fasl-read-count s))
+                     (size-in-bytes (* 4 element-count))
+                     (vector (%allocate-code-vector element-count)))
+                (declare (fixnum element-count size-in-bytes))
+                (%epushval s vector)
+                (let ((scratch (make-array size-in-bytes
+                                           :element-type '(unsigned-byte 8))))
+                  (%fasl-read-n-bytes s scratch 0 size-in-bytes)
+                  (%darwinarm64-jit-install-code vector scratch size-in-bytes))
+                vector))))
+    t)
   )
 
 (provide "ARM64ENV")

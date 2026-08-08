@@ -687,30 +687,26 @@
 (deffaslop $fasl-code-vector (s)
   (let* ((element-count (%fasl-read-count s))
          (size-in-bytes (* 4 element-count))
-         ;; Darwin/arm64: load into MAP_JIT (same arena as LAP/`compile`).
-         ;; Fasl bytes are unchanged; only the load-time home of the
-         ;; code-vector changes.  Running at the canonical VA avoids the
-         ;; unbiased NX-per-call tax that made compile-ccl unusable when
-         ;; fasls landed on the RW heap.
-         ;;
-         ;; Fill path: read into a heap u8 scratch (lisp may call already-
-         ;; loaded JIT code), then blit under WP in kernel C.  Do NOT
-         ;; (%jit-wp nil) around %fasl-read-n-bytes — that is the cold-load
-         ;; write-fault footgun.
-         (vector #+darwinarm64-target
-                 (%allocate-code-vector element-count)
-                 #-darwinarm64-target
-                 (allocate-typed-vector :code-vector element-count)))
+         ;; Darwin/arm64: MAP_JIT only when *darwinarm64-map-jit-fasls* is T
+         ;; (purified image / rebuild host).  Cold-load must use the heap so
+         ;; code is purifyable; MAP_JIT-resident lisp that toggles WP dies.
+         (use-jit #+darwinarm64-target
+                  (and (boundp '*darwinarm64-map-jit-fasls*)
+                       *darwinarm64-map-jit-fasls*)
+                  #-darwinarm64-target
+                  nil)
+         (vector (if use-jit
+                   (%allocate-code-vector element-count)
+                   (allocate-typed-vector :code-vector element-count))))
     (declare (fixnum element-count size-in-bytes))
     (%epushval s vector)
-    #+darwinarm64-target
-    (let ((scratch (make-array size-in-bytes :element-type '(unsigned-byte 8))))
-      (%fasl-read-n-bytes s scratch 0 size-in-bytes)
-      (%darwinarm64-jit-install-code vector scratch size-in-bytes))
-    #-darwinarm64-target
-    (progn
-      (%fasl-read-n-bytes s vector 0 size-in-bytes)
-      (%make-code-executable vector))
+    (if use-jit
+      (let ((scratch (make-array size-in-bytes :element-type '(unsigned-byte 8))))
+        (%fasl-read-n-bytes s scratch 0 size-in-bytes)
+        (%darwinarm64-jit-install-code vector scratch size-in-bytes))
+      (progn
+        (%fasl-read-n-bytes s vector 0 size-in-bytes)
+        (%make-code-executable vector)))
     vector))
 
 (defun fasl-read-gvector (s subtype)

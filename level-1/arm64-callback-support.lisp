@@ -43,22 +43,35 @@
   (declare (ignorable info))
   (let* ((p (%allocate-callback-pointer 32))
          (addr (%lookup-subprim-address
-                #.(arm64::subprimitive-offset ".SPcallback"))))
-    #+(and darwin-target arm64-target)
-    (%darwin-jit-write-protect nil)
-    (setf (%get-unsigned-long p 0)          ; movz x8,#lo16(index)
-          (logior #xd2800008 (ash (ldb (byte 16 0) index) 5))
-          (%get-unsigned-long p 4)          ; movk x8,#hi16(index),lsl #16
-          (logior #xf2a00008 (ash (ldb (byte 16 16) index) 5))
-          (%get-unsigned-long p 8)  #x58000090   ; ldr x16,.+16
-          (%get-unsigned-long p 12) #xd61f0200   ; br x16
-          (%get-unsigned-long p 16) #xd503201f   ; nop
-          (%get-unsigned-long p 20) #xd503201f   ; nop
-          (%%get-unsigned-longlong p 24) addr)
-    #+(and darwin-target arm64-target)
-    (%darwin-jit-write-protect t)
-    ;; I/D-cache sync — REQUIRED on arm64 before the stub is executed
-    ;; (same idiom as %make-code-executable, arm64-def.lisp).
+                #.(arm64::subprimitive-offset ".SPcallback")))
+         ;; Assemble into a heap u8 scratch, then C-blit into the MAP_JIT
+         ;; callback page.  Never call pthread_jit_write_protect_np from
+         ;; MAP_JIT-resident lisp — that makes the caller non-executable.
+         (scratch (make-array 32 :element-type '(unsigned-byte 8)
+                              :initial-element 0)))
+    (with-macptrs ((s))
+      (%vect-data-to-macptr scratch s)
+      (setf (%get-unsigned-long s 0)          ; movz x8,#lo16(index)
+            (logior #xd2800008 (ash (ldb (byte 16 0) index) 5))
+            (%get-unsigned-long s 4)          ; movk x8,#hi16(index),lsl #16
+            (logior #xf2a00008 (ash (ldb (byte 16 16) index) 5))
+            (%get-unsigned-long s 8)  #x58000090   ; ldr x16,.+16
+            (%get-unsigned-long s 12) #xd61f0200   ; br x16
+            (%get-unsigned-long s 16) #xd503201f   ; nop
+            (%get-unsigned-long s 20) #xd503201f   ; nop
+            (%%get-unsigned-longlong s 24) addr)
+      #+(and darwin-target arm64-target)
+      (ff-call (foreign-symbol-address "darwin_arm64_jit_install_code")
+               :address p
+               :address s
+               :unsigned-fullword 32
+               :void)
+      #-(and darwin-target arm64-target)
+      (dotimes (i 32)
+        (setf (%get-unsigned-byte p i) (%get-unsigned-byte s i))))
+    ;; Non-Darwin: I/D-cache sync via kernel import.  Darwin path already
+    ;; icaches inside jit_install_code.
+    #-(and darwin-target arm64-target)
     (ff-call (%kernel-import #.arm64::kernel-import-makedataexecutable)
              :address p
              :unsigned-fullword 32
