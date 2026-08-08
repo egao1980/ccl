@@ -684,13 +684,16 @@
 ;;; FP args: load d0-d7 from the 64-byte staging block unconditionally
 ;;; (unused slots are zeroed by the caller).
 ;;;
-;;; _SPffcall discards the with-variable-c-frame allocation.  Re-establish
-;;; SP at FRAME (still intact above the restored SP) so discard-c-frame
-;;; can pop via savedsp — same idea as x86 re-linking tcr.foreign-sp.
+;;; _SPffcall already discards the with-variable-c-frame allocation.
+;;; Re-establish SP at FRAME (c_frame still intact above the restored SP
+;;; for the no-overflow case) so discard-c-frame can pop via savedsp —
+;;; same idea as x86 %do-ff-call re-linking tcr.foreign-sp.  RESULT is a
+;;; stack argument: load then drop it before the linked subprim call.
 
 (defarm64lapfunction %do-ff-call ((result 0) (frame arg_x) (fp-regs arg_y) (entry arg_z))
   (check-nargs 4)
   (ldr temp0 (:@ vsp (:$ 0)))           ; result macptr
+  (add vsp vsp (:$ arm64::node-size))   ; pop stack arg
   (vpush frame)
   (vpush temp0)
   (macptr-ptr imm0 fp-regs)
@@ -711,7 +714,6 @@
   (mov sp temp0)                        ; reclaim for discard-c-frame
   (mov arg_z rnil)
   (ret))
-
 (defun %ff-call (entry &rest specs-and-vals)
   (declare (dynamic-extent specs-and-vals))
   (let* ((len (length specs-and-vals))
