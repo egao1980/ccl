@@ -46,6 +46,20 @@ look hung (re-eval every unevaluable macro each pass). Fixes:
 Typical CDB (~current SDK): ~617 objc-classes, ~11304 objc-methods.
 Smoke: `tools/darwin-cocoa-smoke.lisp` (CDB keys; no objc-bridge load).
 
+### Cocoa bridge shims (modern SDK)
+
+`tools/darwin-arm64-cdb/` injects into local cocoa CDBs (also via
+`cocoa-populate.sh` `zzz-*.ffi`):
+
+* `YES`/`NO` constants (FILTER_FFI_MACROS drops them)
+* `objc_msgSend*` prototypes (`OBJC_OLD_DISPATCH_PROTOTYPES=0`)
+* `instancetype` + generics → `id`; `va_list`; `NSConstantString` layout
+* complete `struct id` (= `objc_object`) — ffigen emits `(struct-ref "id")`
+  which otherwise installs an incomplete record and breaks `record-length`
+
+Inject: `inject-objc-{bool-constants,msgsend-prototypes,bridge-types}.lisp`.
+Bridge smoke: `tools/darwin-objc-bridge-smoke.lisp` (poll; may SIGBUS if raced).
+
 ## Regenerate libc
 
 ```sh

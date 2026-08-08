@@ -279,9 +279,17 @@
 #+apple-objc-2.0
 (progn
 (defun setup-objc-exception-globals ()
-  (flet ((set-global (offset name)
-           (setf (%get-ptr (%int-to-ptr (+ (target-nil-value) (%kernel-global-offset offset))))
-                 (foreign-symbol-address name))))
+  (flet ((set-global (name foreign-name)
+           #-arm64-target
+           (setf (%get-ptr (%int-to-ptr (+ (target-nil-value)
+                                           (%kernel-global-offset name))))
+                 (foreign-symbol-address foreign-name))
+           #+arm64-target
+           ;; rnil-relative: target-nil-value is not the relocated base
+           ;; on darwinarm64 (lowmem-bias still 0).
+           (%set-kernel-global-ptr-from-offset
+            (%kernel-global-offset name)
+            (foreign-symbol-address foreign-name))))
     (set-global 'objc-2-personality "___objc_personality_v0")
     (set-global 'objc-2-begin-catch "objc_begin_catch")
     (set-global 'objc-2-end-catch "objc_end_catch")
@@ -593,7 +601,12 @@ instance variable."
       (has-lisp-slot-vector nsobject)
       (let* ((cf-p (%cf-instance-p nsobject)) 
              (isize (if cf-p (external-call "malloc_size" :address nsobject :size_t) (%objc-class-instance-size (#/class nsobject))))
-             (skip (if cf-p (+ (record-length :id) 4 #+64-bit-target 4) (record-length :id))))
+             ;; Prefer :objc_object: modern ffigen also installs an
+             ;; incomplete (:struct :id) via (struct-ref "id"), which
+             ;; shadows the id typedef in record-length.  Header size
+             ;; is the isa slot either way (8 on 64-bit).
+             (skip (if cf-p (+ (record-length :objc_object) 4 #+64-bit-target 4)
+                       (record-length :objc_object))))
         (declare (fixnum isize skip))
         (or (> skip isize)
             (do* ((i skip (1+ i)))
@@ -750,11 +763,19 @@ NSObjects describe themselves in more detail than others."
   (augment-objc-interfaces interfaces-name interfaces-dir))
 
                       
-(defmethod print-object ((p ns:protocol) stream)
-  (print-unreadable-object (p stream :type t)
-    (format stream "~a (#x~x)"
-            (%get-cstring (#/name p))
-            (%ptr-to-int p))))
+;; Modern cocoa CDBs omit Protocol; install-foreign-objc-class then
+;; keeps it private and never exports ns:protocol.  Only define the
+;; printer when the class was actually mapped.
+(eval-when (:compile-toplevel :load-toplevel :execute)
+  (export (intern "PROTOCOL" "NS") "NS"))
+
+(eval-when (:load-toplevel :execute)
+  (when (find-class 'ns:protocol nil)
+    (defmethod print-object ((p ns:protocol) stream)
+      (print-unreadable-object (p stream :type t)
+        (format stream "~a (#x~x)"
+                (%get-cstring (#/name p))
+                (%ptr-to-int p))))))
 
                                          
 (defmethod terminate ((instance objc:objc-object))

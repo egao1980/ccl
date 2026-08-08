@@ -1516,6 +1516,15 @@ result-type-specifer is :VOID or NIL"
   (result-spec nil :type (or symbol list))
   (min-args 0 :type fixnum))
 
+(defun objc-messaging-entry-name-p (name)
+  "Entry points that look variadic in headers but use the method register ABI."
+  (member name
+          '("objc_msgSend" "objc_msgSendSuper"
+            "objc_msgSend_stret" "objc_msgSendSuper_stret"
+            "objc_msgSend_fpret" "objc_msgSend_fp2ret"
+            "method_invoke" "method_invoke_stret"
+            "_objc_msgForward" "_objc_msgForward_stret")
+          :test #'string=))
 
 (defun %external-call-expander (whole env)
   (declare (ignore env))
@@ -1544,15 +1553,24 @@ result-type-specifer is :VOID or NIL"
           (let* ((spec (car specs)))
             (cond ((eq spec :void)
                    ;; must be last arg-spec; remaining args should be
-                   ;; keyword/value pairs.  Emit :variadic as a zero-width
-                   ;; marker so Darwin/arm64 aapcs64-ff-call can force the
-                   ;; following args onto the stack (Apple ABI: all `...`
-                   ;; args are stack-only).  Linux ignores the marker.
+                   ;; keyword/value pairs.
+                   ;;
+                   ;; Darwin/arm64 C variadic (printf, …): emit :variadic so
+                   ;; aapcs64-ff-call forces following args onto the stack
+                   ;; (Apple ABI: all `...` args are stack-only).  Linux
+                   ;; ignores the marker.
+                   ;;
+                   ;; ObjC messaging (objc_msgSend*) is *not* C-variadic on
+                   ;; arm64 despite the `...` prototype: method args use the
+                   ;; normal register ABI (self/SEL in x0/x1, then x2…).
+                   ;; Emitting :variadic here put those args on the stack and
+                   ;; faulted.  Skip the marker for the messaging entry points.
                    (unless (evenp (length args))
                      (error "Remaining arguments should be keyword/value pairs: ~s"
                             args))
-                   (call :variadic)
-                   (call nil)
+                   (unless (objc-messaging-entry-name-p external-name)
+                     (call :variadic)
+                     (call nil))
                    (do* ()
                         ((null args))
                      (call (pop args))

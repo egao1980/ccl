@@ -10,8 +10,14 @@
 * Interpreted `%ff-call` landed; frame re-establish after `_SPffcall` (needs
   image rebuild from boot after tip `3ba8197b`). Mid-session vinsns reload
   + `save-application` corrupts the image — always rebuild from bootstrap.
-* Still open: objc-bridge require path; ASLR; strip dual-map scaffolding;
-  remaining CDB dirs (carbon/quartz scripts exist; gl regenerated).
+* **OBJC-SUPPORT + NSString smoke green** (surgical tip reload into image;
+  `tools/darwin-objc-bridge-smoke.lisp`): skip `:variadic` for `objc_msgSend*`;
+  aapcs64 N-word; exception globals via `%set-kernel-global-ptr-from-offset`;
+  cocoa CDB shims (`YES`/`NO`, msgsend prototypes, `instancetype`/generics/
+  `struct id`, NSConstantString); `initialized-nsobject-p` → `:objc_object`;
+  soft `ns:protocol` printer when Protocol absent from modern objc-classes.cdb.
+  N-word/varargs sends still preemptively stubbed. Still open: ASLR; strip
+  dual-map; enable real N-word/varargs; Protocol class CDB inject.
 
 ## August 2026 — Darwin/arm64 boot image (egao1980)
 

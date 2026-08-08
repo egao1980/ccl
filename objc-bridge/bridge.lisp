@@ -771,14 +771,66 @@
   function
   super-function)
 
+(defun %objc-sig-varargs-p (sig)
+  (eq (car (last (cdr sig))) :void))
+
+(defun %objc-sig-needs-nword-struct-p (sig)
+  "True if SIG has a by-value record arg/result that aapcs64 still
+rejects (64 < bits ≤ 128 → N-word expand-ff-call)."
+  (dolist (spec sig nil)
+    (handler-case
+        (let* ((ft (parse-foreign-type spec)))
+          (when (typep ft 'foreign-record-type)
+            (let* ((bits (or (foreign-type-bits ft)
+                             (progn
+                               (ensure-foreign-type-bits ft)
+                               (foreign-type-bits ft)))))
+              (when (and (integerp bits) (> bits 64) (<= bits 128))
+                (return t)))))
+      (error () nil))))
+
+(defun %objc-unsupported-send-stub (sig reason)
+  (warn "objc-method-signature-info: skip ~s: ~a" sig reason)
+  (lambda (&rest args)
+    (declare (ignore args))
+    (error "ObjC send for signature ~s not supported on this backend (~a)"
+           sig reason)))
+
 (defun objc-method-signature-info (sig)
   (values
    (or (gethash sig *objc-method-signatures*)
        (setf (gethash sig *objc-method-signatures*)
              (make-objc-method-signature-info
               :type-signature sig
-              :function (compile-send-function-for-signature  sig)
-              :super-function (%compile-send-function-for-signature  sig t))))))
+              ;; Darwin/arm64: skip compile for known-unsupported shapes
+              ;; (N-word structs, varargs stub) so registering thousands of
+              ;; init* messages does not blow the stack in the compiler.
+              :function (cond
+                          ((%objc-sig-varargs-p sig)
+                           (%objc-unsupported-send-stub
+                            sig "ObjC varargs send not yet supported on arm64"))
+                          ((%objc-sig-needs-nword-struct-p sig)
+                           (%objc-unsupported-send-stub
+                            sig "aapcs64-ff-call: N-word struct arg not yet supported"))
+                          (t
+                           (handler-case
+                               (compile-send-function-for-signature sig)
+                             (error (c)
+                               (%objc-unsupported-send-stub sig c)))))
+              :super-function (cond
+                                ((or (%objc-sig-varargs-p sig)
+                                     (%objc-sig-needs-nword-struct-p sig))
+                                 (lambda (&rest args)
+                                   (declare (ignore args))
+                                   (error "ObjC super-send for signature ~s not supported on this backend" sig)))
+                                (t
+                                 (handler-case
+                                     (%compile-send-function-for-signature sig t)
+                                   (error (c)
+                                     (declare (ignore c))
+                                     (lambda (&rest args)
+                                       (declare (ignore args))
+                                       (error "ObjC super-send for signature ~s not supported on this backend" sig)))))))))))
 
 (defmethod make-load-form ((siginfo objc-method-signature-info) &optional env)
   (declare (ignore env))
@@ -960,14 +1012,19 @@
       (flet ((ensure-method-signature (m)
                (or (objc-method-info-signature m)
                    (setf (objc-method-info-signature m)
-                         (let* ((sig 
-                                 (cons (reduce-to-ffi-type
-                                        (objc-method-info-result-type m))
-                                       (mapcar #'reduce-to-ffi-type
-                                               (objc-method-info-arglist m)))))
-                           (setf (objc-method-info-signature-info m)
-                                 (objc-method-signature-info sig))
-                           sig)))))
+                         (handler-case
+                             (let* ((sig
+                                     (cons (reduce-to-ffi-type
+                                            (objc-method-info-result-type m))
+                                           (mapcar #'reduce-to-ffi-type
+                                                   (objc-method-info-arglist m)))))
+                               (setf (objc-method-info-signature-info m)
+                                     (objc-method-signature-info sig))
+                               sig)
+                           (error (c)
+                             (warn "ensure-method-signature: skip ~s: ~a"
+                                   objc-name c)
+                             nil))))))
         (let* ((methods (objc-message-info-methods message-info))
                (signatures ())
                (protocol-methods)
@@ -975,22 +1032,25 @@
           (labels ((signatures-equal (xs ys)
                      (and xs
                           ys
-                          (do* ((xs xs (cdr xs))
-                                (ys ys (cdr ys)))
-                               ((or (null xs) (null ys))
-                                (and (null xs) (null ys)))
-                            (unless (foreign-type-= (ensure-foreign-type (car xs))
-                                                    (ensure-foreign-type (car ys)))
-                              (return nil))))))
+                          (handler-case
+                              (do* ((xs xs (cdr xs))
+                                    (ys ys (cdr ys)))
+                                   ((or (null xs) (null ys))
+                                    (and (null xs) (null ys)))
+                                (unless (foreign-type-= (ensure-foreign-type (car xs))
+                                                        (ensure-foreign-type (car ys)))
+                                  (return nil)))
+                            (error () nil)))))
             (dolist (m methods)
               (let* ((signature (ensure-method-signature m)))
-                (pushnew signature signatures :test #'signatures-equal)
-                (if (getf (objc-method-info-flags m) :protocol)
-                  (push m protocol-methods)
-                  (let* ((pair (assoc signature signature-alist :test #'signatures-equal)))
-                    (if pair
-                      (push m (cdr pair))
-                      (push (cons signature (list m)) signature-alist)))))))
+                (when signature
+                  (pushnew signature signatures :test #'signatures-equal)
+                  (if (getf (objc-method-info-flags m) :protocol)
+                    (push m protocol-methods)
+                    (let* ((pair (assoc signature signature-alist :test #'signatures-equal)))
+                      (if pair
+                        (push m (cdr pair))
+                        (push (cons signature (list m)) signature-alist))))))))
           (setf (objc-message-info-ambiguous-methods message-info)
                 (mapcar #'cdr
                         (sort signature-alist
@@ -1002,9 +1062,10 @@
                 protocol-methods)
           (when (cdr signatures)
             (setf (getf (objc-message-info-flags message-info) :ambiguous) t))
-          (let* ((first-method (car methods))
-                 (first-sig (objc-method-info-signature first-method))
-                 (first-sig-len (length first-sig)))
+          (let* ((first-method (or (find-if #'objc-method-info-signature methods)
+                                   (car methods)))
+                 (first-sig (and first-method (objc-method-info-signature first-method)))
+                 (first-sig-len (if first-sig (length first-sig) 1)))
             (setf (objc-message-info-req-args message-info)
                   (1- first-sig-len))
             ;; Whether some arg/result types vary or not, we want to insist
@@ -1020,9 +1081,14 @@
                      (eq (car (last (objc-method-info-arglist m)))
                          *void-foreign-type*))
                    (method-has-structure-arg (m)
+                     ;; Unknown typedefs (ObjC generics, missing CDB
+                     ;; entries) must not abort message registration.
                      (dolist (arg (objc-method-info-arglist m))
-                       (when (typep (ensure-foreign-type arg) 'foreign-record-type)
-                         (return t)))))
+                       (handler-case
+                           (when (typep (ensure-foreign-type arg)
+                                        'foreign-record-type)
+                             (return t))
+                         (error () nil)))))
               (when (dolist (method methods)
                       (when (method-has-structure-arg method)
                         (return t)))

@@ -273,6 +273,20 @@
   (stur imm0 (:@ ptr (:$ arm64::macptr.address))) ; ppc:67 (str -> stur)
   (ret))                                ; ppc:68
 
+;;; %set-kernel-global-ptr-from-offset — store a macptr's address into a
+;;; kernel global (rnil-relative).  Needed because Lisp
+;;; `(setf (%get-ptr (+ (target-nil-value) off)))` is wrong on
+;;; darwinarm64 (target-nil-value is the canonical low nil, not the
+;;; relocated STATIC_BASE address; bias is still 0).
+(defarm64lapfunction %set-kernel-global-ptr-from-offset ((offset arg_y)
+                                                         (ptr arg_z))
+  (check-nargs 2)
+  (unbox-fixnum imm0 offset)
+  (add imm0 imm0 rnil)
+  (ldur imm1 (:@ ptr (:$ arm64::macptr.address)))
+  (str imm1 (:@ imm0 (:$ 0)))
+  (ret))
+
 ;;; =====================================================================
 ;;; %current-frame-ptr / %current-vsp — ppc:197/202
 ;;; =====================================================================
@@ -781,7 +795,12 @@
              (:registers)
              (:variadic)
              (t (if (typep spec 'unsigned-byte)
-                  (incf overflow-words spec)
+                  ;; N-word struct: each word is a GPR (then overflow).
+                  (dotimes (k (the fixnum spec))
+                    (declare (ignore k))
+                    (incf n-gpr-args)
+                    (when (> n-gpr-args 8)
+                      (incf overflow-words)))
                   (error "unknown arg spec ~s" spec)))))
          (let ((total-words (+ 8 overflow-words)))
            (declare (fixnum total-words))
@@ -849,12 +868,21 @@
                            (incf n-fp-args))))
                    (:registers)
                    (t
+                    ;; N-word struct from macptr: consecutive GPR words.
                     (let* ((p 0))
                       (declare (fixnum p))
-                      (dotimes (i (the fixnum spec))
-                        (setf (%get-ptr argbuf other-offset) (%get-ptr val p))
-                        (incf p 8)
-                        (incf other-offset 8))))))
+                      (dotimes (k (the fixnum spec))
+                        (declare (ignore k))
+                        (incf n-gpr-args)
+                        (cond ((<= n-gpr-args 8)
+                               (setf (%get-ptr argbuf gpr-offset)
+                                     (%get-ptr val p))
+                               (incf gpr-offset 8))
+                              (t
+                               (setf (%get-ptr argbuf other-offset)
+                                     (%get-ptr val p))
+                               (incf other-offset 8)))
+                        (incf p 8))))))
                (%do-ff-call result-buf argbuf fp-args entry)
                (ecase result-spec
                  (:void nil)

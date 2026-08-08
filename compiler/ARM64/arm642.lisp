@@ -9163,6 +9163,17 @@
                           (incf nsingle-floats))
                         (compiler-bug "aapcs64-ff-call: more than 8 floating-point ~
                                        args (~s) not yet supported" argspecs)))))
+              ;; N-word memory struct (from expand-ff-call when 64<bits<=128):
+              ;; load N consecutive doublewords from a macptr.
+              ((typep argspec 'unsigned-byte)
+               (dotimes (i argspec)
+                 (declare (ignore i))
+                 (cond (force-stack
+                        (note-overflow :unsigned-doubleword))
+                       (t
+                        (incf ngpr-args)
+                        (when (> ngpr-args 8)
+                          (note-overflow :unsigned-doubleword))))))
               (t
                (cond (force-stack
                       (note-overflow argspec))
@@ -9259,6 +9270,27 @@
                                  (incf gpr-offset))
                                 (t
                                  (store-overflow-gpr ptr spec)))))))
+                ;; N-word memory structs (expand-ff-call emits N for
+                ;; 64<bits<=128): load N consecutive doublewords from the
+                ;; macptr value and pass them in consecutive GPRs (then
+                ;; overflow), matching x8664/ppc64.
+                ((typep spec 'unsigned-byte)
+                 (with-imm-target () (ptr :address)
+                   (arm642-one-targeted-reg-form seg valform ptr)
+                   (with-imm-target (ptr) (r :u64)
+                     (dotimes (i spec)
+                       (! mem-ref-c-doubleword r ptr
+                          (ash i arm64::word-shift))
+                       (cond (force-stack
+                              (store-overflow-gpr r :unsigned-doubleword))
+                             (t
+                              (incf ngpr-args)
+                              (cond ((<= ngpr-args 8)
+                                     (! set-c-arg r gpr-offset)
+                                     (incf gpr-offset))
+                                    (t
+                                     (store-overflow-gpr
+                                      r :unsigned-doubleword)))))))))
                 (t
                  (with-imm-target () (valreg :natural)
                    (let* ((reg (arm642-unboxed-integer-arg-to-reg

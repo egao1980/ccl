@@ -58,6 +58,24 @@ do
   h-to-ffi.sh "$h"
 done
 
+# Modern objc.h: `#define YES __objc_yes` / `#define NO __objc_no` — not
+# numeric, so macros never become constants. FILTER_FFI_MACROS=frameworks
+# also drops usr/include/objc. Historical Clozure CDBs had YES=1 NO=0.
+# Ship synthetic enum-idents so parse-ffi records them (objc-bridge).
+cp "${HERE}/objc-bool-constants.ffi" ./objc-bool-constants.ffi
+
+# Modern message.h forces OBJC_OLD_DISPATCH_PROTOTYPES=0 →
+# `void objc_msgSend(void)`.  Clozure needs the historical
+# `id objc_msgSend(id, SEL, ...)` shape (trailing void = kwargs).
+# zzz- name so parse-standard-ffi-files overwrites the empty prototypes.
+cp "${HERE}/objc-msgsend-prototypes.ffi" ./zzz-objc-msgsend-prototypes.ffi
+
+# instancetype, va_list, NSConstantString layout for objc-bridge.
+cp "${HERE}/objc-bridge-types.ffi" ./zzz-objc-bridge-types.ffi
+
 echo ";; cocoa-populate done under $(pwd)"
 echo ";; objc-class count:" "$(grep -h '^(objc-class ' $(find . -name '*.ffi') 2>/dev/null | wc -l)"
 echo ";; objc-instance-method count:" "$(grep -h '^(objc-instance-method ' $(find . -name '*.ffi') 2>/dev/null | wc -l)"
+echo ";; installed objc-bool-constants.ffi (YES/NO)"
+echo ";; installed zzz-objc-msgsend-prototypes.ffi"
+echo ";; installed zzz-objc-bridge-types.ffi"
