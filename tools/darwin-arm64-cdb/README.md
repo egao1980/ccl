@@ -60,6 +60,28 @@ cd $CCL
 
 Smoke: `tools/darwin-cocoa-smoke.lisp` (~600+ classes / ~10k+ methods).
 
+## gl / carbon / quartz / quartzcore
+
+| Dir | Lang | Populate | Headers |
+|-----|------|----------|---------|
+| **gl** | C | `gl-populate.sh` | OpenGL.h, glu.h, glut.h (AGL skipped if missing) |
+| **carbon** | C | `carbon-populate.sh` | Carbon.h (`-Wno-deprecated-declarations`) |
+| **quartz** | ObjC | `quartz-populate.sh` | Quartz.h (`FILTER_FFI_MACROS=frameworks`) |
+| **quartzcore** | ObjC | `quartzcore-populate.sh` | QuartzCore.h (`FILTER_FFI_MACROS=frameworks`) |
+
+```sh
+IFACE=gl   # or carbon|quartz|quartzcore
+mkdir -p /tmp/${IFACE}-cdb-backup
+cp $CCL/darwin-arm64-headers/${IFACE}/*.cdb /tmp/${IFACE}-cdb-backup/
+
+cd $CCL/darwin-arm64-headers/${IFACE}/C
+$CCL/tools/darwin-arm64-cdb/${IFACE}-populate.sh
+
+cd $CCL
+CCL_INTERFACE=$IFACE ./darm64cl --stack-size 16M --thread-stack-size 16M \
+  --no-init --batch < tools/darwin-arm64-cdb/parse-interface-dir.lisp
+```
+
 ## Notes
 
 * `parse-standard-ffi-files` replaces `*.cdb` in place.
