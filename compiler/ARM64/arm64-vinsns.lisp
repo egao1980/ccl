@@ -301,7 +301,12 @@
                                               ((n-c-args :lisp))
                                               ((header (:u64 #.arm64::imm0))
                                                (size :u64)
-                                               (prevsp (:imm #.arm64::imm1))))
+                                               ;; Wired :imm is not a valid
+                                               ;; allocate-temporary-vreg class
+                                               ;; (only unwired :imm is); use
+                                               ;; :u64 like header.  Imm0/imm1
+                                               ;; pinning retained for pc_luser_xp.
+                                               (prevsp (:u64 #.arm64::imm1))))
   (add size n-c-args (:$ '6))        ;+ header + prevsp + 4-word frame
   (add size size (:$ (:apply 1- arm64::dnode-size))) ;round byte size up...
   (and size size (:$ (:apply - arm64::dnode-size)))  ; ...to a dnode boundary

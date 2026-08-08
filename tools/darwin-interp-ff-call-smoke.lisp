@@ -2,16 +2,25 @@
 ;;;;
 ;;;;   ./darm64cl --no-init --batch < tools/darwin-interp-ff-call-smoke.lisp
 ;;;;
-;;;; Reloads arm642 handlers + %ff-call from source when the image
+;;;; Reloads vinsns/handlers/%ff-call from source when the image
 ;;;; predates this change.  Does NOT save-application.
 (in-package :ccl)
 (setq *warn-if-redefine-kernel* nil)
+(require "ARM64ENV")
 
-;; C frames live on Lisp SP — %foreign-stack-pointer is SP.
-(eval '(define-arm64-vinsn %foreign-stack-pointer (((dest :imm)) ())
-         (add dest sp (:$ 0))))
+;; Reload alloc-variable-c-frame + %foreign-stack-pointer vinsns.
+(let* ((src (merge-pathnames "compiler/ARM64/arm64-vinsns.lisp" (ccl-directory))))
+  (with-open-file (s src)
+    (loop for f = (read s nil s)
+          until (eq f s)
+          when (and (consp f)
+                    (eq (car f) 'define-arm64-vinsn)
+                    (let ((name (cadr f)))
+                      (or (eq name '%foreign-stack-pointer)
+                          (and (consp name) (eq (car name) 'alloc-variable-c-frame)))))
+          do (eval f))))
 
-;; arm642 acode handlers for with-variable-c-frame / %foreign-stack-pointer.
+;; arm642 acode handlers.
 (let* ((src (merge-pathnames "compiler/ARM64/arm642.lisp" (ccl-directory))))
   (with-open-file (s src)
     (loop for f = (read s nil s)
@@ -24,7 +33,7 @@
                               arm642-with-variable-c-frame)))
           do (eval f))))
 
-;; %do-ff-call + %ff-call from level-0.
+;; %do-ff-call + %ff-call.
 (let* ((src (merge-pathnames "level-0/ARM64/arm64-def.lisp" (ccl-directory)))
        (forms ()))
   (with-open-file (s src)
@@ -37,7 +46,6 @@
   (dolist (f (nreverse forms)) (eval f)))
 
 (use-interface-dir :libc)
-;; Top-level EVAL of #_getpid → %ff-call (not aapcs64-ff-call).
 (let ((pid (eval '(#_getpid))))
   (unless (and (integerp pid) (> pid 0))
     (error "interp getpid => ~s" pid))
