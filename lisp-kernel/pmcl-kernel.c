@@ -80,10 +80,9 @@
 #endif
 
 Boolean use_mach_exception_handling =
-#if defined(DARWIN) && !defined(ARM64)
+#if defined(DARWIN)
   true
 #else
-  /* ARM64 Darwin: Mach exception server not ported yet; Unix signals. */
   false
 #endif
 ;

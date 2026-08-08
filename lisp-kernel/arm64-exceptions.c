@@ -55,6 +55,11 @@
 
 #include "threads.h"              /* ppc-exceptions.c:49 */
 
+#ifdef DARWIN
+extern Boolean use_mach_exception_handling;
+void signal_handler(int, siginfo_t *, ExceptionInformation *, TCR *, int);
+#endif
+
 /* ------------------------------------------------------------------ */
 /* lisp_globals.h grew a real ARM64 branch @ 93d72a0 (nil-anchored via
  * the runtime lisp_nil) -- the fixed-address PROPOSED shim that lived
@@ -2223,14 +2228,22 @@ exit_signal_handler(TCR *tcr, int old_valence, natural old_last_lisp_frame)
 }
 
 void
-signal_handler(int signum, siginfo_t *info, ExceptionInformation *context)
+signal_handler(int signum, siginfo_t *info, ExceptionInformation *context
+#ifdef DARWIN
+               , TCR *tcr, int old_valence
+#endif
+)
 {                                 /* ppc-exceptions.c:1823-1866 */
+#ifndef DARWIN
   TCR *tcr;
   int old_valence;
+#endif
   natural old_last_lisp_frame;
   xframe_list xframe_link;
 
+#ifndef DARWIN
   tcr = (TCR *) get_interrupt_tcr(false);
+#endif
 
   /* The signal handler's entered with all signals (notably the
      thread_suspend signal) blocked.  Don't allow any other signals
@@ -2248,7 +2261,14 @@ signal_handler(int signum, siginfo_t *info, ExceptionInformation *context)
   old_last_lisp_frame = tcr->last_lisp_frame;
   tcr->last_lisp_frame = (natural)ptr_to_lispobj(xpSP(context));
 
+#ifndef DARWIN
   old_valence = prepare_to_wait_for_exception_lock(tcr, context);
+#else
+  /* Mach path: setup_signal_frame already set EXCEPTION_WAIT + pending xp.
+     Unix bring-up fallback still needs prepare_to_wait. */
+  if (!use_mach_exception_handling)
+    old_valence = prepare_to_wait_for_exception_lock(tcr, context);
+#endif
 
   if (tcr->flags & (1 << TCR_FLAG_BIT_PENDING_SUSPEND)) {
     CLR_TCR_FLAG(tcr, TCR_FLAG_BIT_PENDING_SUSPEND);
@@ -2307,8 +2327,13 @@ signal_handler(int signum, siginfo_t *info, ExceptionInformation *context)
      executing lisp code.  If some other thread gets the exception
      lock and GCs, the context (this thread's suspend_context) will
      be updated.  (ppc:1858-1863) */
-  exit_signal_handler(tcr, old_valence, old_last_lisp_frame);
-  raise_pending_interrupt(tcr);
+  /* Mach + pseudo_sigreturn: leave pending_exception_context for
+     do_pseudo_sigreturn (matches x86 Darwin).  Unix signal path still
+     needs exit_signal_handler + return to _sigtramp. */
+  if (!use_mach_exception_handling) {
+    exit_signal_handler(tcr, old_valence, old_last_lisp_frame);
+    raise_pending_interrupt(tcr);
+  }
 }
 
 /*
@@ -2589,19 +2614,37 @@ install_signal_handler(int signo, void *handler, unsigned flags)
   }
 }
 
+#ifdef DARWIN
+/* Mach resumes into the 5-arg signal_handler.  Unix sigaction only
+ * supplies 3 args — bridge when Mach is off. */
+static void
+unix_signal_handler(int signum, siginfo_t *info, ExceptionInformation *context)
+{
+  TCR *tcr = (TCR *)get_interrupt_tcr(false);
+  int old_valence = prepare_to_wait_for_exception_lock(tcr, context);
+  signal_handler(signum, info, context, tcr, old_valence);
+}
+#endif
+
 void
 install_pmcl_exception_handlers()
 {                                 /* ppc-exceptions.c:2210-2226 */
   extern int no_sigtrap;
-  /* udf raises SIGILL on aarch64-linux; brk (the drafts' remaining
-     placeholders + the debugger entry) raises SIGTRAP. */
-  install_signal_handler(SIGILL, (void *)signal_handler, RESERVE_FOR_LISP);
-  if (no_sigtrap != 1) {
-    install_signal_handler(SIGTRAP, (void *)signal_handler, RESERVE_FOR_LISP);
+  /* Darwin x86 skips SIGILL/BUS/SEGV/FPE when Mach owns them.  Same here. */
+  if (!use_mach_exception_handling) {
+#ifdef DARWIN
+    void *handler = (void *)unix_signal_handler;
+#else
+    void *handler = (void *)signal_handler;
+#endif
+    install_signal_handler(SIGILL, handler, RESERVE_FOR_LISP);
+    if (no_sigtrap != 1) {
+      install_signal_handler(SIGTRAP, handler, RESERVE_FOR_LISP);
+    }
+    install_signal_handler(SIGBUS, handler, RESERVE_FOR_LISP);
+    install_signal_handler(SIGSEGV, handler, RESERVE_FOR_LISP);
+    install_signal_handler(SIGFPE, handler, RESERVE_FOR_LISP);
   }
-  install_signal_handler(SIGBUS, (void *)signal_handler, RESERVE_FOR_LISP);
-  install_signal_handler(SIGSEGV, (void *)signal_handler, RESERVE_FOR_LISP);
-  install_signal_handler(SIGFPE, (void *)signal_handler, RESERVE_FOR_LISP);
 
   install_signal_handler(SIGNAL_FOR_PROCESS_INTERRUPT,
                          (void *)interrupt_handler, RESERVE_FOR_LISP);

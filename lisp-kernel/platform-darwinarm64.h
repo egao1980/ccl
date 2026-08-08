@@ -106,14 +106,9 @@ typedef uint32_t opcode, *pc;
 extern void darwin_sigreturn(ExceptionInformation *, unsigned);
 extern natural os_major_version;
 
-/* Unix-signal bring-up (no Mach exception server yet): handlers must
- * RETURN to _sigtramp, which calls __sigreturn with the kernel token.
- * Raw darwin_sigreturn() fails under SA_VALIDATE_SIGRETURN_FROM_SIGTRAMP
- * (default since Mojave) → Bug("sigreturn returned") → abort/134.
- * _sigtramp is also not an exported symbol on arm64, so the x86
- * darwin_sigaction() workaround cannot be linked.  Empty SIGRETURN
- * matches linuxarm64: rely on trampoline return.  Context updates
- * during suspend (GC) are in-place on the same ucontext. */
+/* Unix-signal fallback when Mach is off: handlers must RETURN to
+ * _sigtramp.  With Mach exception ports (use_mach_exception_handling),
+ * UUOs resume into signal_handler and return via pseudo_sigreturn. */
 #define DarwinSigReturn(context) ((void)(context))
 #define SIGRETURN(context) ((void)(context))
 

@@ -256,11 +256,17 @@ C(atomic_and):
  * arm64-exceptions.c are the ones actually linked; these asm names are
  * NOT exported to avoid duplicate symbols. */
 
-/* ppc-asmutils.s:270-277 / arm-asmutils.s:196-199: a recognizable
- * do-nothing marker the exception path can resume through. */
+/* Darwin Mach: deliberate fault so catch_mach_exception_raise_state
+ * sees pc==pseudo_sigreturn and runs do_pseudo_sigreturn (x86 uses hlt).
+ * Non-Darwin: unused; keep a harmless stub for the shared .s. */
         .globl C(pseudo_sigreturn)
 C(pseudo_sigreturn):
+#if defined(__APPLE__)
+        udf     #0
+        b       C(pseudo_sigreturn)
+#else
         ret
+#endif
 
 /* Barrier helpers (ARM32 set, arm-asmutils.s:255-266). */
         .globl C(dmb)

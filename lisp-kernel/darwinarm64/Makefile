@@ -35,7 +35,7 @@ COBJ = pmcl-kernel.o gc-common.o arm64-gc.o bits.o arm64-exceptions.o \
 	memory.o unix-calls.o
 
 DEBUGOBJ = lispdcmd.o plprint.o plsym.o albt.o arm64-print.o
-KERNELOBJ = $(COBJ) arm64-asmutils.o arm64-imports.o
+KERNELOBJ = $(COBJ) arm64-asmutils.o arm64-imports.o mach_exc_server.o
 
 SPINC = lisp.s arm64-constants.h arm64-macros.s errors.s arm64-uuo.s \
 	lisp_globals.s
@@ -60,8 +60,20 @@ $(ASMOBJ): $(SPINC)
 $(COBJ): $(CHEADERS)
 $(DEBUGOBJ): $(CHEADERS) lispdcmd.h
 
+mach_exc_server.o: mach_exc_server.c mach_exc.h
+	$(CC) -include ../$(PLATFORM_H) -c mach_exc_server.c $(CDEFINES) \
+		$(CDEBUG) $(COPT) $(WFORMAT) -mmacosx-version-min=$(OSVERSION) -o $@
+
+mach_exc_server.c: ../mach_exc.defs
+	mig -arch arm64 -header /dev/null -user /dev/null \
+		-sheader mach_exc.h -server mach_exc_server.c \
+		$<
+
+mach_exc.h: mach_exc_server.c
+
 cclean:
-	$(RM) -f $(KERNELOBJ) $(DEBUGOBJ) ../../darm64cl
+	$(RM) -f $(KERNELOBJ) $(DEBUGOBJ) ../../darm64cl \
+	  mach_exc.h mach_exc_server.c
 
 clean: cclean
 	$(RM) -f $(SPOBJ)
