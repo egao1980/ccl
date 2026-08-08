@@ -1,4 +1,5 @@
 ;;;; Surgical reload of tip open-issue fixes, then objc smoke.
+;;;; For a purified tip image use tools/darwin-clean-build-smoke.lisp instead.
 ;;;; Poll — do not block forever.
 (in-package :ccl)
 (setq *warn-if-redefine-kernel* nil)

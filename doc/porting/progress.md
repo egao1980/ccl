@@ -36,8 +36,13 @@
   - arm64 `%throw` LAP; `%throwing-through-cleanup-p` (nthrow1value via
     tsp nodes=4; nthrowvalues via consecutive savefn=0); lazy ObjC
     callback trampoline + `objc-propagate-throw`.
-  - Smoke: `tools/darwin-open-issues-smoke.lisp`,
-    `tools/throwing-cleanup-smoke.lisp`.
+  - Smoke: `tools/darwin-open-issues-smoke.lisp` (surgical),
+    `tools/throwing-cleanup-smoke.lisp` (surgical),
+    `tools/darwin-clean-build-smoke.lisp` (post-rebuild, no reload).
+* **Clean-build gate:** `./tools/rebuild-darwinarm64-unbiased.sh`
+  (Rosetta `dx86cl64` + `darwin-arm64-headers`). Step 4 ends with
+  `darwin-clean-build-smoke` — fails if image lacks baked `%throw` /
+  objc tip. Log: `/tmp/darwinarm64-rebuild-unbiased.log`.
 
 ## August 2026 — Darwin/arm64 boot image (egao1980)
 
