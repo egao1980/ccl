@@ -105,9 +105,12 @@ Added:
 * `darwin_sigreturn` in `arm64-asmutils.s`
 * `tools/xdarwinarm64.lisp` (alias of the darwinarm64 cross-setup)
 
-Still open for Darwin: MAP_JIT / separate code area, rnil-relative
-statics (no fixed low memory), Mach exception ports, Apple AAPCS64
-divergences in FFI, interface `.cdb` databases.
+Still open for Darwin: full dual-map removal after purified images,
+rnil-relative statics, Mach exception ports, Apple AAPCS64 FFI,
+interface `.cdb` databases.  MAP_JIT code heap + conditional
+`HEAP_EXEC_BIAS` (IMAGE_BASE only) landed for runtime compile;
+fasl cold-load still uses the dual-mapped heap (WP-off would NX
+earlier MAP_JIT pages).
 
 ## May 21 – June 23
 I looked a bit at Manfred Bergmann’s code at
