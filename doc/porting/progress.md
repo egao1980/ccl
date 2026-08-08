@@ -17,11 +17,16 @@
   `struct id`, NSConstantString); `initialized-nsobject-p` → `:objc_object`;
   soft `ns:protocol` printer when Protocol absent from modern objc-classes.cdb.
 * **N-word/varargs ungated** (lazy `objc-method-signature-info` compile).
-  `#/substringWithRange:` (NSRange) works ~most runs after tip
-  `expand-ff-call` + `aapcs64-ff-call` reload + explicit `deref-macptr`, but
-  still heisenbugs (all-or-nothing bad compile). `#/stringWithFormat:` (varargs)
-  still SIGSEGVs when N-word path is live. Still open: harden N-word RA;
-  fix arm64 varargs send; ASLR; strip dual-map; Protocol CDB inject.
+  ≤128-bit records expand to N× `:unsigned-doubleword`/`%%get-unsigned-longlong`
+  (CCL x8664-shaped). `#/stringWithFormat:` (varargs) still SIGSEGVs.
+* **substring heisenbug = Apple arm64 tagged pointers**, not N-word RA:
+  `tagged-objc-instance-p` used x86 low-nibble test; arm64 uses bit 63.
+  Short NSStrings failed `recognize-objc-object` all-or-nothing per process.
+* **Bare `(require "OBJC-SUPPORT")` SIGSEGVs** on stale image; tip reload of
+  `%ff-call` / `expand-ff-call` / expander / `aapcs64-ff-call` first → ~OK.
+  Integrate via full unbiased rebuild (do not mid-session `save-application`).
+  Still open: bake tip into image; Darwin variadic send; require residual
+  flake; Protocol CDB inject.
 
 ## August 2026 — Darwin/arm64 boot image (egao1980)
 
