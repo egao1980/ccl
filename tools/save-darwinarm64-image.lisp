@@ -13,6 +13,8 @@
 (in-package "CCL")
 
 (setq *outstanding-deferred-warnings* nil)
+;; Register MAP_JIT bounds for purify; lisp macptrs are cleared in
+;; save-application (dumplisp) so the image does not dump dead pointers.
 (when (fboundp '%darwinarm64-register-code-heap)
   (%darwinarm64-register-code-heap))
 (format t "~&;; save-application darm64cl.image :purify t (AREA_CODE)~%")

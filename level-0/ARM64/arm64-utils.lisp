@@ -892,7 +892,11 @@ be somewhat larger than what was specified)."
              :void)))
 
 (defun %ensure-jit-code-heap ()
-  (unless *jit-code-base*
+  "MAP_JIT code heap for this process.  Not part of the saved image —
+lisp macptrs are cleared before dumplisp; restart remmaps."
+  (unless (and *jit-code-base*
+               (typep *jit-code-base* 'macptr)
+               (not (%null-ptr-p *jit-code-base*)))
     (let* ((len #.(* 256 1024 1024))
            (p (ff-call (foreign-symbol-address "mmap")
                        :address (%null-ptr)
