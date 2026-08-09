@@ -664,17 +664,17 @@ loaded fasls go to MAP_JIT so compile-ccl is not NX-taxed under DUAL_MAP=0."
         (let ((p (probe-file f)))
           (when p (delete-file p))))
       (load "ccl:compiler;ARM64;arm64-lap.lisp")
+      ;; Restore bin/arm64-lap.da64fsl while still heap-only.  Compiling it
+      ;; after MAP_JIT alloc is restored poisons later large compile-file
+      ;; (e.g. tools/asdf.lisp hard-crashes).
+      (compile-file "ccl:compiler;ARM64;arm64-lap.lisp"
+                    :output-file "ccl:bin;arm64-lap"
+                    :verbose *load-verbose*)
       ;; Restore level-0 MAP_JIT helpers, then install MAP_JIT faslop.
       (setf (fdefinition '%allocate-code-vector) old-alloc)
       (when old-install
         (setf (fdefinition '%darwinarm64-jit-install-code) old-install))
-      (setf (svref *fasl-dispatch-table* 2) old-faslop)
-      ;; Leave a heap-code fasl on disk for cold-load (ensure deleted it
-      ;; above so tip LAP loads from source). compile-file keeps heap
-      ;; code-vectors under *compiling-file*.
-      (compile-file "ccl:compiler;ARM64;arm64-lap.lisp"
-                    :output-file "ccl:bin;arm64-lap"
-                    :verbose *load-verbose*))
+      (setf (svref *fasl-dispatch-table* 2) old-faslop))
     (%enable-darwinarm64-map-jit-fasls)
     (format t "~&;MAP_JIT host faslop enabled (tip LAP on heap)~%")))
 
