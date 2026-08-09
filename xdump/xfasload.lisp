@@ -1948,7 +1948,12 @@
     (target-xcompile-level-0 target recompile)))
     
 (defun target-Xload-level-0 (target &optional (recompile t))
-  (let* ((*xload-target-backend* (or (find-xload-backend target)
+  ;; Bind *target-backend* like cross-xload-level-0.  setup-xload-target-parameters
+  ;; reads arch::target-nil-value from *target-backend*; on Darwin/arm64 that must
+  ;; be *darwinarm64-target-arch* (#x20000100b), not the shared linux #x1300b.
+  (let* ((*target-backend* (or (find-backend target)
+                               (error "Unknown backend: ~s" target)))
+         (*xload-target-backend* (or (find-xload-backend target)
 				     *xload-default-backend*))
 	 (*xload-startup-file* (backend-xload-info-default-startup-file-name
 				*xload-target-backend*)))

@@ -20,9 +20,11 @@ stability, ObjC bridge, and throw/uwp parity for callbacks.
   is T (post-purify / saved image). Cold-load keeps code on the heap so purify
   works and lisp never toggles WP from MAP_JIT-resident code.
 - `rebuild-ccl` on darwinarm64: tip LAP host install before `compile-ccl`;
-  two-phase kernel `DUAL_MAP=1` → purify → `DUAL_MAP=0`; boot image via
-  Rosetta `tools/bootstrap-darwinarm64-boot.lisp` (native `xload-level-0`
-  still cold-load faults in `%FIND-PKG` — open).
+  two-phase kernel `DUAL_MAP=1` → purify → `DUAL_MAP=0`; **native**
+  `xload-level-0` (no Rosetta). Darwin nil lives on a dedicated
+  `*darwinarm64-target-arch*` (`#x20000100b`); sharing linux
+  `*arm64-target-arch*` (`#x1300b`) was the `%FIND-PKG` cold-load fault.
+  Optional Rosetta fallback: `%darwinarm64-cross-xload-boot-image`.
 - `compile-file` emits heap code-vectors (MAP_JIT is interactive-only): MAP_JIT
   uvectors are outside the lisp heap and do not fasl-dump.
 - Host ensure: heap-install tip `arm64-lap`, then restore MAP_JIT alloc +

@@ -684,13 +684,13 @@ loaded fasls go to MAP_JIT so compile-ccl is not NX-taxed under DUAL_MAP=0."
 
 #+darwinarm64-target
 (defun %darwinarm64-cross-xload-boot-image ()
-  "Build arm64-boot.image via Rosetta dx86cl64 cross-xload.
-Native xload-level-0 currently produces a boot image that cold-load
-faults in %FIND-PKG; the stock bootstrap script is the known-good path."
+  "Optional Rosetta fallback.  Prefer native xload-level-0 (Darwin nil-value
+is fixed in arm64-backend); kept for hosts that lack a working native
+xload toolchain."
   (let* ((dx86 (probe-file "ccl:ccl;dx86cl64"))
          (script (probe-file "ccl:tools;bootstrap-darwinarm64-boot.lisp")))
     (unless dx86
-      (error "darwinarm64 rebuild needs ./dx86cl64 for cross-xload"))
+      (error "darwinarm64 cross-xload needs ./dx86cl64"))
     (unless script
       (error "missing ~s" "ccl:tools;bootstrap-darwinarm64-boot.lisp"))
     (format t "~&;Cross-xloading arm64-boot.image via Rosetta dx86cl64 ...")
@@ -790,8 +790,20 @@ the lisp and run REBUILD-CCL again.")
              (%ensure-darwinarm64-map-jit-host-loader)
              (with-global-optimization-settings ()
                (compile-ccl (not (null force)))
+               ;; Native xload: Darwin nil-value is owned by
+               ;; *darwinarm64-target-arch* (not the shared linux #x1300b).
                #+darwinarm64-target
-               (%darwinarm64-cross-xload-boot-image)
+               (progn
+                 (ensure-darwinarm64-target-arch)
+                 ;; Keep host/target pointers on the Darwin backend object.
+                 (setq *arm64-backend* *darwinarm64-backend*
+                       *host-backend* *darwinarm64-backend*
+                       *target-backend* *darwinarm64-backend*)
+                 (format t "~&;Native xload-level-0 (nil=#x~x) ...~%"
+                         (arch::target-nil-value
+                          (backend-target-arch *host-backend*)))
+                 (force-output)
+                 (if force (xload-level-0 :force) (xload-level-0)))
                #-darwinarm64-target
                (if force (xload-level-0 :force) (xload-level-0)))
              (when kernel

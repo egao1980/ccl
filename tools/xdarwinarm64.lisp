@@ -21,12 +21,11 @@
   (unless (boundp '*arm64-xload-modules*)
     (error "ccl:lib;compile-ccl.lisp did not define *arm64-xload-modules*"))
   (update-modules *arm64-xload-modules* t)
-  ;; Shared *arm64-target-arch* defaults to linux-style nil at #x1300b.
-  ;; Darwin static space lives at #x200000000 (see platform-darwinarm64.h).
-  ;; fulltag-nil = #xb; nil = static + 4K + tag.
-  (let* ((arch (backend-target-arch *darwinarm64-backend*))
-         (nil-value #x20000100b))
-    (setf (arch::target-nil-value arch) nil-value)
-    (format t "~&;; darwinarm64 nil-value => #x~x~%" nil-value)))
+  ;; Prefer the dedicated Darwin arch (nil #x20000100b).  Do not mutate
+  ;; the shared linux-shaped *arm64-target-arch*.
+  (ensure-darwinarm64-target-arch)
+  (format t "~&;; darwinarm64 nil-value => #x~x~%"
+          (arch::target-nil-value
+           (backend-target-arch *darwinarm64-backend*))))
 
 (load-darwinarm64-backend)
