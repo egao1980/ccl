@@ -60,14 +60,10 @@
    legacy biased call sites jump into the bias band.
 
    Under DM=0 the NX handler redirects every canonical entry into impure
-   heap code.  Remap is idempotent but mach_vm_remap+protect per fault
-   turns compile-ccl into a multi-hour crawl (sample: >90% of CPU in
-   darwin_arm64_remap_exec_alias).  Probe the bias VA first and skip
-   Mach remap when an RX alias is already present.
-
-   Note: a dense bitmap from IMAGE_BASE does not work — the dynamic
-   heap lives near IMAGE_BASE+2TiB (0x3020…), far outside any small
-   window. */
+   heap code without remapping; this helper runs from
+   xMakeDataExecutable / image load / GC relocate so the alias exists
+   before the first fetch.  Do not region-probe-skip: stale RX pages
+   at bias (zeros) caused udf #0. */
 Boolean
 darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
 {
@@ -82,35 +78,13 @@ darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
     return true;
   }
   rx = (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
-  {
-    mach_vm_address_t probe = rx;
-    mach_vm_size_t vmsize = 0;
-    natural depth = 0;
-    vm_region_submap_info_data_64_t info;
-    mach_msg_type_number_t count = VM_REGION_SUBMAP_INFO_COUNT_64;
-    kern_return_t q;
-
-    memset(&info, 0, sizeof(info));
-    q = mach_vm_region_recurse(mach_task_self(),
-                               &probe,
-                               &vmsize,
-                               &depth,
-                               (vm_region_recurse_info_t)&info,
-                               &count);
-    if (q == KERN_SUCCESS &&
-        probe <= rx &&
-        (probe + vmsize) >= (rx + (mach_vm_size_t)len) &&
-        (info.protection & VM_PROT_EXECUTE) != 0) {
-      /* RX present is not enough: a stale alias (heap page recycled /
-         remapped under the canonical VA while the bias mapping still
-         points at old zeroed pages) looks executable but fetches as
-         udf #0.  Require the first word to match before skipping. */
-      if (*(volatile natural *)(natural)start ==
-          *(volatile natural *)(natural)rx) {
-        return true;
-      }
-    }
-  }
+  /* Always mach_vm_remap.  A region-probe "already RX" skip was a
+     serious correctness hazard: stale bias pages (zeros) still look
+     executable, and a leading-word/memcmp match can false-positive
+     when both sides start with the code-vector udf#0 sentinel — NX
+     then redirects into udf #0.  Remap is only on the make-executable
+     / image-load path now (NX handler is redirect-only under DM=0),
+     so the old remap-every-fault cost does not return. */
   /* VM_INHERIT_SHARE: fork must keep the RX alias.  INHERIT_NONE left
      children with RW heap only; return-from-fork at a biased PC (or NX
      redirect into the missing alias) infinite-looped in the fault

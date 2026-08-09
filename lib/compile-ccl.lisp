@@ -809,12 +809,71 @@ the lisp and run REBUILD-CCL again.")
              (when reload
                (let* ((old-write-date
                        (or (ignore-errors (file-write-date (standard-image-name)))
-                           0)))
+                           0))
+                      #+darwinarm64-target
+                      (save-script
+                       (merge-pathnames "tools/save-darwinarm64-image.lisp"
+                                        (current-directory))))
+                 ;; Darwin/arm64: after a MAP_JIT-heavy compile-ccl, a single
+                 ;; run-program/fork has occasionally returned with pid NIL
+                 ;; and status still :running ("Bug: fork failed but status
+                 ;; field not set?").  Retry; use the file driver so stdin
+                 ;; is a real fd (matches tools/rebuild-darwinarm64-unbiased.sh).
+                 #+darwinarm64-target
+                 (progn
+                   (gc)
+                   (unless (probe-file save-script)
+                     (error "missing ~s" save-script))
+                   (let ((ok nil) (last-out "") (last-status nil) (last-code nil))
+                     (dotimes (attempt 5)
+                       (format t "~&;Cold-load/purify save attempt ~d ...~%"
+                               (1+ attempt))
+                       (force-output)
+                       (handler-case
+                           (with-open-file (cmd save-script :direction :input)
+                             (with-output-to-string (output)
+                               (let* ((proc (run-program
+                                             (format nil "./~a"
+                                                     (standard-kernel-name))
+                                             (list* "--image-name"
+                                                    (standard-boot-image-name)
+                                                    "--no-init"
+                                                    "--batch"
+                                                    reload-arguments)
+                                             :input cmd
+                                             :output output
+                                             :error output))
+                                      (st (external-process-status proc))
+                                      (code (external-process-%exit-code proc)))
+                                 (setq last-status st last-code code
+                                       last-out (get-output-stream-string output))
+                                 (when (and (eq st :exited) (eql code 0))
+                                   (setq ok t)))))
+                         (error (e)
+                           (setq last-out (format nil "~a" e)
+                                 last-status :error
+                                 last-code -1)))
+                       (when ok (return))
+                       (sleep 1))
+                     (unless ok
+                       (error "Errors (~s ~s) reloading boot image:~&~a"
+                              last-status last-code last-out))
+                     (let* ((write-date
+                             (or (ignore-errors
+                                   (file-write-date (standard-image-name)))
+                                 0)))
+                       (unless (and write-date (> write-date old-write-date))
+                         (error "The heap image ~a does not appear to have been written correctly.  This may indicate a problem with the bootstapping image."
+                                (standard-image-name)))
+                       (format t "~&;Wrote heap image: ~s"
+                               (truename (format nil "ccl:~a"
+                                                 (standard-image-name))))
+                       (when verbose
+                         (format t "~&;Reload heap image output:~%~a"
+                                 last-out)))))
+                 #-darwinarm64-target
                  (with-input-from-string (cmd (format nil
-                                                #-darwinarm64-target
                                                 "(save-application ~s)"
-                                                #+darwinarm64-target
-                                                "(save-application ~s :purify t)"
                                                 (standard-image-name)))
                    (with-output-to-string (output)
                      (multiple-value-bind (status exit-code)
