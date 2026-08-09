@@ -208,6 +208,11 @@
 (setq *xload-default-backend* *linuxarm64-xload-backend*)
 )
 
+#+darwinarm64-target
+(progn
+(setq *xload-default-backend* *darwinarm64-xload-backend*)
+)
+
 
 
 

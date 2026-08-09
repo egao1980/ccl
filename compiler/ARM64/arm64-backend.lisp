@@ -240,6 +240,8 @@
 ;;; embeds #x1300b and cold-load faults in %FIND-PKG (read @ #x13010).
 (defconstant +darwinarm64-nil-value+ #x20000100b)
 
+(defvar *darwinarm64-target-arch* nil)
+
 (defun ensure-darwinarm64-target-arch ()
   "Fresh arch copy with Darwin nil-value; install on *darwinarm64-backend*."
   (let ((a (copy-structure arm64::*arm64-target-arch*)))
@@ -248,8 +250,6 @@
     (when (and (boundp '*darwinarm64-backend*) *darwinarm64-backend*)
       (setf (backend-target-arch *darwinarm64-backend*) a))
     a))
-
-(defvar *darwinarm64-target-arch* nil)
 
 #+(or darwinarm64-target (not arm64-target))
 (defvar *darwinarm64-backend*
