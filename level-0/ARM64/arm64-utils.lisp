@@ -875,8 +875,9 @@ be somewhat larger than what was specified)."
 #+(and darwinarm64-target)
 (progn
 
-;;; T from cold-load onward.  compile-file still emits heap code-vectors
-;;; (see arm64-lap) because MAP_JIT uvectors do not fasl-dump.
+;;; T from cold-load onward.  Native compile (incl. compile-file) allocates
+;;; MAP_JIT code-vectors; fasl dump reads their bytes.  Fasl *load* also
+;;; MAP_JIT via $fasl-code-vector.
 (defvar *darwinarm64-map-jit-fasls* t)
 
 (defvar *jit-code-base* nil)

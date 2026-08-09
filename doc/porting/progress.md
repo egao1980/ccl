@@ -8,7 +8,8 @@
 * Removed `HEAP_EXEC_BIAS` NX redirect, `mach_vm_remap` aliases, and
   `rebuild-ccl` DUAL_MAP 1→0 two-phase kernel / host faslop surgery.
 * WP only in kernel C (`darwin_arm64_jit_*`). `*darwinarm64-map-jit-fasls*`
-  defaults to T. compile-file still emits heap vectors (fasl dump).
+  defaults to T. Native compile (incl. `compile-file` / eval-when) always
+  MAP_JIT — heap is NX; fasl dump reads MAP_JIT bytes.
 * Gate: `./tools/rebuild-darwinarm64-unbiased.sh` (single kernel) and
   stock-shaped `(rebuild-ccl :full t)`.
 
