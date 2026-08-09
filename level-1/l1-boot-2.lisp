@@ -372,7 +372,12 @@ present and false otherwise. This variable shouldn't be set by user code.")
       #+(and arm64-target linux-target)
       (bin-load-provide "FFI-LINUXARM64" "ffi-linuxarm64")
       #+(and arm64-target darwin-target)
-      (bin-load-provide "FFI-DARWINARM64" "ffi-darwinarm64")
+      ;; ffi-darwinarm64 (require "FFI-LINUXARM64") — load the fasl first.
+      ;; Falling back to .lisp source hits parse-file-options-line →
+      ;; STRING-TRIM before MISC is loaded.
+      (progn
+        (bin-load-provide "FFI-LINUXARM64" "ffi-linuxarm64")
+        (bin-load-provide "FFI-DARWINARM64" "ffi-darwinarm64"))
 
 
       ;; Knock wood: all standard reader macros and no non-standard

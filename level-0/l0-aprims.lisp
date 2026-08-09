@@ -113,24 +113,34 @@
 
 (defun make-gcable-macptr (flags)
   (let ((v (%alloc-misc target::xmacptr.element-count target::subtag-macptr)))
-    (setf (uvref v target::xmacptr.address-cell) 0) ; ?? yup.
+    ;; Prefer %null-ptr over storing literal 0 into address-cell: on
+    ;; arm64 the uvref/0 path can compile as (%get-ptr nil) and trap
+    ;; wrong-type during cold load (Darwin bring-up).
+    (%setf-macptr v (%null-ptr))
     (setf (uvref v target::xmacptr.flags-cell) flags)
     (set-%gcable-macptrs% v)
     v))
 
 (defun %make-recursive-lock-ptr ()
   (record-system-lock
-   (%setf-macptr
-    (make-gcable-macptr $flags_DisposeRecursiveLock)
-    (ff-call (%kernel-import target::kernel-import-new-recursive-lock)
-             :address))))
+   (let ((p (make-gcable-macptr $flags_DisposeRecursiveLock)))
+     ;; (%setf-macptr p (ff-call … :address)) — NOT (setf (%get-ptr p) …).
+     ;; The latter stores *through* p's foreign address (null here).
+     ;; Darwin bring-up: "mov x9,rnil" fatals were from bootstrapping
+     ;; without reloading acode-rewrite after nxenv (aapcs64-ff-call
+     ;; rewrite missing), not from %setf-macptr itself.
+     (%setf-macptr p
+                   (ff-call (%kernel-import target::kernel-import-new-recursive-lock)
+                            :address))
+     p)))
 
 (defun %make-rwlock-ptr ()
   (record-system-lock
-   (%setf-macptr
-    (make-gcable-macptr $flags_DisposeRwLock)
-    (ff-call (%kernel-import target::kernel-import-rwlock-new)
-             :address))))
+   (let ((p (make-gcable-macptr $flags_DisposeRwLock)))
+     (%setf-macptr p
+                   (ff-call (%kernel-import target::kernel-import-rwlock-new)
+                            :address))
+     p)))
   
 (defun make-recursive-lock ()
   (make-lock nil))
