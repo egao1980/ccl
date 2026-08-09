@@ -1,8 +1,10 @@
 ;;;; Inject objc-bridge shim types into cocoa types.cdb / records.cdb.
 ;;;;
-;;;; Covers: instancetype, ObjC generics (ObjectType/…), va_list,
-;;;; __uint128_t, NSConstantString layout.  Full cocoa reparse also picks
-;;;; these up via cocoa-populate.sh installing zzz-objc-bridge-types.ffi.
+;;;; Covers: complete `id` struct (for struct-ref), instancetype, ObjC
+;;;; generics (ObjectType/…), va_list, __uint128_t, NSConstantString.
+;;;; Bare `:id` uses the typedef via `%foreign-type-or-record` (not the
+;;;; struct).  Full cocoa reparse also picks these up via cocoa-populate.sh
+;;;; installing zzz-objc-bridge-types.ffi.
 ;;;;
 ;;;;   ./darm64cl --no-init --batch \
 ;;;;     < tools/darwin-arm64-cdb/inject-objc-bridge-types.lisp

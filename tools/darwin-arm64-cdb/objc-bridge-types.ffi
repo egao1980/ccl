@@ -1,9 +1,7 @@
-;; Modern SDK ffigen emits `(struct-ref "id")` for some protocol /
-;; block params (e.g. NSItemProviderCompletionHandler).  That installs
-;; an incomplete `(:STRUCT :ID)` which then shadows the real `id`
-;; typedef in `%foreign-type-or-record` / `record-length`.  Define the
-;; same layout as `objc_object` so those refs resolve and
-;; `(record-length :id)` stays 8 on 64-bit.
+;; Complete layout for ffigen's `(struct-ref "id")` (protocol/block params).
+;; Bare `:id` still resolves via the typedef (`:* objc_object`) because
+;; `%foreign-type-or-record` prefers a non-record parse over a same-named
+;; record — needed for `rlet ((p :id +null-ptr+))` in cocoa-ide.
 (struct ("" 0)
  "id"
  (("isa" (field (typedef "Class") 0 8))))

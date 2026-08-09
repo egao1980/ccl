@@ -1323,8 +1323,17 @@ Which one name refers to depends on foreign-type-spec in the obvious manner."
     type
     (if (consp type)
       (parse-foreign-type type)
-      (or (%find-foreign-record type)
-	  (parse-foreign-type type)))))
+      ;; Prefer a non-record typedef (e.g. ObjC `id` → :* objc_object) over
+      ;; a same-named record installed for `(struct-ref "id")`.  Explicit
+      ;; `(:struct …)` forms still go through parse-foreign-type above.
+      (let* ((parsed (handler-case (parse-foreign-type type)
+                       (error () nil)))
+             (rec (%find-foreign-record type)))
+        (cond ((and parsed (not (typep parsed 'foreign-record-type)))
+               parsed)
+              (rec rec)
+              (parsed parsed)
+              (t (parse-foreign-type type)))))))
 
 (defun %foreign-type-or-record-size (type &optional (units :bits))
   (let* ((info (%foreign-type-or-record type))
