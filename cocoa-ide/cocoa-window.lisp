@@ -126,10 +126,20 @@
 
 (defun enable-foreground ()
   #+apple-objc
-  (rlet ((psn :<P>rocess<S>erial<N>umber))
-    (#_GetCurrentProcess psn)
-    (#_TransformProcessType psn #$kProcessTransformToForegroundApplication)
-    (eql 0 (#_SetFrontProcess psn))))
+  (progn
+    ;; Modern macOS: TransformProcessType alone is not enough for a
+    ;; non-bundled or ad-hoc process to show windows / take focus.
+    ;; NSApplicationActivationPolicyRegular == 0 (not in our CDB yet).
+    (ignore-errors
+      (when *nsapp*
+        (#/setActivationPolicy: *nsapp* 0)))
+    (rlet ((psn :<P>rocess<S>erial<N>umber))
+      (#_GetCurrentProcess psn)
+      (#_TransformProcessType psn #$kProcessTransformToForegroundApplication)
+      (eql 0 (#_SetFrontProcess psn)))
+    (ignore-errors
+      (when *nsapp*
+        (#/activateIgnoringOtherApps: *nsapp* #$YES)))))
 
 (objc:defmethod (#/toggleConsole: :void) ((self ide-application) sender)
   (let* ((console (console self)))

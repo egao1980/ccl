@@ -13,18 +13,78 @@
 #include "lisp-exceptions.h"
 #include "threads.h"
 #include "area.h"
+#include "memprotect.h"
 
 #include <stdlib.h>
 #include <stdio.h>
 #include <stdarg.h>
 #include <string.h>
+#include <errno.h>
 #include <pthread.h>
 #include <signal.h>
+#include <sys/mman.h>
 #include <mach/mach.h>
 #include <mach/mach_error.h>
 #include <mach/arm/exception.h>
 
 #ifdef DARWIN
+
+extern area *readonly_area;
+extern int page_size, log2_page_size;
+extern Boolean darwin_arm64_in_code_heap(void *);
+
+/* Resolve Darwin W^X PROTECTION_FAILURE without the unix signal path.
+ * The signal_handler path depends on ESR in the synthetic mcontext; when
+ * that is missing/zero we never UnProtect / mprotect(RX) and the same
+ * page oscillates forever → beachball ("app not responding").
+ * pc==far ⇒ instruction abort (need RX); else data abort into RX (need RW). */
+static Boolean
+darwin_arm64_try_wx_fixup(natural pcval, natural far, Boolean nx)
+{
+  LogicalAddress page;
+  int rc;
+
+  if (!far)
+    return false;
+
+  if (nx) {
+    if (readonly_area &&
+        pcval >= (natural)readonly_area->low &&
+        pcval < (natural)readonly_area->active) {
+      page = (LogicalAddress)truncate_to_power_of_2(pcval, log2_page_size);
+      rc = mprotect(page, page_size, PROT_READ | PROT_EXEC);
+      if (rc == 0)
+        return true;
+      fprintf(dbgout, "[darwinarm64] mprotect(RX) page 0x%lx failed errno=%d\n",
+              (unsigned long)(natural)page, errno);
+      fflush(dbgout);
+      return false;
+    }
+    if (darwin_arm64_in_code_heap((void *)pcval)) {
+      pthread_jit_write_protect_np(1);
+      return true;
+    }
+    return false;
+  }
+
+  /* Data fault: write into RX purified / JIT code. */
+  if (readonly_area &&
+      far >= (natural)readonly_area->low &&
+      far < (natural)readonly_area->active) {
+    page = (LogicalAddress)truncate_to_power_of_2(far, log2_page_size);
+    if (UnProtectMemory(page, page_size) == 0)
+      return true;
+    fprintf(dbgout, "[darwinarm64] UnProtect page 0x%lx failed errno=%d\n",
+            (unsigned long)(natural)page, errno);
+    fflush(dbgout);
+    return false;
+  }
+  if (darwin_arm64_in_code_heap((void *)far)) {
+    pthread_jit_write_protect_np(0);
+    return true;
+  }
+  return false;
+}
 
 #define TCR_FROM_EXCEPTION_PORT(p) find_tcr_from_exception_port(p)
 #define TCR_TO_EXCEPTION_PORT(t) \
@@ -63,16 +123,47 @@ void fatal_mach_error(char *format, ...);
 
 #define ts_pc(t) ((t)->__pc)
 
+/* Emergency scratch for signal frames when the faulting SP is already
+ * in/near the OS or CCL stack guard.  Without this, setup_signal_frame's
+ * memmove into the guard kills the Mach exception thread and the process
+ * beachballs / SIGSEGVs with a useless secondary crash. */
+static uint8_t darwin_arm64_exc_frame_scratch[8192]
+  __attribute__((aligned(16)));
+static int darwin_arm64_exc_frame_scratch_used = 0;
+
 static LispObj *
 find_foreign_sp(LispObj sp, area *foreign_area, TCR *tcr)
 {
+  BytePtr bsp;
+  natural need = sizeof(siginfo_t) + sizeof(ExceptionInformation)
+    + 1024 /* mcontext + slop */ + C_REDZONE_LEN + 64;
+
   /* ARM64 TCR has no foreign_sp (x86); last_lisp_frame is the cstack
    * boundary recorded by ff-call spentries when SP is off the lisp stack. */
   if (((BytePtr)sp < foreign_area->low) ||
       ((BytePtr)sp > foreign_area->high)) {
     sp = (LispObj)(tcr->last_lisp_frame);
   }
-  return (LispObj *)((sp - C_REDZONE_LEN) & ~(LispObj)(C_STK_ALIGN - 1));
+  bsp = (BytePtr)((sp - C_REDZONE_LEN) & ~(LispObj)(C_STK_ALIGN - 1));
+
+  /* If the frame would land at/below softlimit (or the area has no room),
+   * use the process-wide scratch buffer.  One concurrent deep fault only. */
+  if ((natural)bsp < (natural)foreign_area->softlimit + need
+      || (natural)bsp < (natural)foreign_area->low + need
+      || darwin_arm64_exc_frame_scratch_used) {
+    if (!darwin_arm64_exc_frame_scratch_used) {
+      darwin_arm64_exc_frame_scratch_used = 1;
+      fprintf(dbgout,
+              "\n[darwinarm64] signal frame: SP 0x%lx near/below softlimit "
+              "0x%lx — using scratch\n",
+              (unsigned long)sp, (unsigned long)(natural)foreign_area->softlimit);
+      fflush(dbgout);
+    }
+    bsp = (BytePtr)darwin_arm64_exc_frame_scratch
+      + sizeof(darwin_arm64_exc_frame_scratch);
+    bsp = (BytePtr)((natural)bsp & ~(natural)(C_STK_ALIGN - 1));
+  }
+  return (LispObj *)bsp;
 }
 
 TCR *
@@ -290,6 +381,45 @@ catch_mach_exception_raise_state(mach_port_t exception_port,
   } else {
     switch (exception) {
     case EXC_BAD_ACCESS:
+      /* Fast W^X fixup (see darwin_arm64_try_wx_fixup). */
+      if (code0 == KERN_PROTECTION_FAILURE && code_count > 1) {
+        natural pcval = (natural)ts->__pc;
+        natural far = (natural)code[1];
+        Boolean nx = (pcval == far);
+        static int wx_logs;
+        if (darwin_arm64_try_wx_fixup(pcval, far, nx)) {
+          if (wx_logs < 16) {
+            wx_logs++;
+            fprintf(dbgout,
+                    "[darwinarm64] W^X fixup #%d %s far=0x%lx pc=0x%lx\n",
+                    wx_logs, nx ? "RX" : "RW",
+                    (unsigned long)far, (unsigned long)pcval);
+            fflush(dbgout);
+          }
+          *out_ts = *ts;
+          *out_state_count = NATIVE_THREAD_STATE_COUNT;
+          return KERN_SUCCESS;
+        }
+      }
+      {
+        static int bad_access_logs;
+        if (bad_access_logs < 8) {
+          bad_access_logs++;
+          fprintf(dbgout,
+                  "\n[darwinarm64] EXC_BAD_ACCESS #%d code0=%lld "
+                  "pc=0x%llx lr=0x%llx sp=0x%llx "
+                  "far=0x%llx cs=[0x%lx,0x%lx) soft=0x%lx\n",
+                  bad_access_logs, (long long)code0,
+                  (unsigned long long)ts->__pc,
+                  (unsigned long long)ts->__lr,
+                  (unsigned long long)ts->__sp,
+                  (unsigned long long)(code_count > 1 ? code[1] : 0),
+                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->low : 0),
+                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->high : 0),
+                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->softlimit : 0));
+          fflush(dbgout);
+        }
+      }
       /* Alignment / debug faults still surface as BAD_ACCESS. */
       if (code0 == EXC_ARM_DA_ALIGN || code0 == EXC_ARM_SP_ALIGN)
         signum = SIGBUS;

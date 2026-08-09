@@ -213,12 +213,24 @@
   (declare (ignore notification))
   (unless (shift-key-now-p)
     (load-ide-init-file))
+  #+arm64-target
+  (ignore-errors
+    ;; Untitled Listener during finishLaunching wedges/crashes the
+    ;; Darwin/arm64 event thread.  activationPolicy helps menu/focus;
+    ;; open a Listener via File → New Listener after launch.
+    ;; NSApplicationActivationPolicyRegular == 0.
+    (#/setActivationPolicy: *nsapp* 0)
+    (#/activateIgnoringOtherApps: *nsapp* #$YES))
   (signal-semaphore *cocoa-ide-finished-launching*))
 
 (objc:defmethod (#/applicationShouldOpenUntitledFile: #>BOOL)
     ((self ide-application-delegate) app)
   (declare (ignore app))
-  t)
+  ;; Darwin/arm64: creating the Listener during finishLaunching still
+  ;; faults (NIL macptr / recursive INVALID-MEMORY-ACCESS) and wedges
+  ;; the event thread → beachball.  Open a Listener after launch instead.
+  #+arm64-target #$NO
+  #-arm64-target t)
 
 (objc:defmethod (#/applicationOpenUntitledFile: :<BOOL>)
     ((self ide-application-delegate) app)
