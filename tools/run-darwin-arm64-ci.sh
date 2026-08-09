@@ -15,5 +15,7 @@ echo ";; darwinarm64 CI smokes (timeout=${TIMEOUT}s)"
 "$SMOKE" "$TIMEOUT" tools/darwin-interp-ff-call-smoke.lisp
 "$SMOKE" "$TIMEOUT" tools/darwin-clean-build-smoke.lisp
 "$SMOKE" "${CCL_COCOA_REQUIRE_TIMEOUT:-300}" tools/darwin-require-cocoa-smoke.lisp
+# Layered AppKit mini-apps (no IDE).  Fail-fast before IDE bring-up.
+./tools/darwin-cocoa-apps/run-darwin-cocoa-apps.sh
 
 echo "DARWIN-ARM64-CI-OK"

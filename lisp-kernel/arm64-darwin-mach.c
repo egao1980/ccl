@@ -26,6 +26,7 @@
 #include <mach/mach.h>
 #include <mach/mach_error.h>
 #include <mach/arm/exception.h>
+#include <dlfcn.h>
 
 #ifdef DARWIN
 
@@ -404,11 +405,34 @@ catch_mach_exception_raise_state(mach_port_t exception_port,
       {
         static int bad_access_logs;
         if (bad_access_logs < 8) {
+          LispObj *cfp;
           bad_access_logs++;
+          {
+            Dl_info di, di2;
+            const char *pn = "?", *sn = "?", *pn2 = "?", *sn2 = "?";
+            unsigned long off = 0, off2 = 0;
+            if (dladdr((void *)(natural)ts->__pc, &di) && di.dli_fname) {
+              pn = di.dli_fname;
+              sn = di.dli_sname ? di.dli_sname : "?";
+              off = (unsigned long)((natural)ts->__pc - (natural)di.dli_saddr);
+            }
+            if (dladdr((void *)(natural)ts->__lr, &di2) && di2.dli_fname) {
+              pn2 = di2.dli_fname;
+              sn2 = di2.dli_sname ? di2.dli_sname : "?";
+              off2 = (unsigned long)((natural)ts->__lr - (natural)di2.dli_saddr);
+            }
+            fprintf(dbgout,
+                    "  pc_sym=%s+%lu in %s\n  lr_sym=%s+%lu in %s\n",
+                    sn, off, pn, sn2, off2, pn2);
+          }
           fprintf(dbgout,
                   "\n[darwinarm64] EXC_BAD_ACCESS #%d code0=%lld "
                   "pc=0x%llx lr=0x%llx sp=0x%llx "
-                  "far=0x%llx cs=[0x%lx,0x%lx) soft=0x%lx\n",
+                  "far=0x%llx cs=[0x%lx,0x%lx) soft=0x%lx\n"
+                  "  x0=%llx x1=%llx x2=%llx x12=%llx x24(tsp)=%llx "
+                  "x25(vsp)=%llx x28=%llx\n"
+                  "  tcr=%llx x28%stcr db_link=%llx catch_top=%llx "
+                  "valence=%d save_vsp=%llx save_tsp=%llx\n",
                   bad_access_logs, (long long)code0,
                   (unsigned long long)ts->__pc,
                   (unsigned long long)ts->__lr,
@@ -416,7 +440,67 @@ catch_mach_exception_raise_state(mach_port_t exception_port,
                   (unsigned long long)(code_count > 1 ? code[1] : 0),
                   (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->low : 0),
                   (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->high : 0),
-                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->softlimit : 0));
+                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->softlimit : 0),
+                  (unsigned long long)ts->__x[0],
+                  (unsigned long long)ts->__x[1],
+                  (unsigned long long)ts->__x[2],
+                  (unsigned long long)ts->__x[12],
+                  (unsigned long long)ts->__x[24],
+                  (unsigned long long)ts->__x[25],
+                  (unsigned long long)ts->__x[28],
+                  (unsigned long long)(natural)tcr,
+                  ((natural)ts->__x[28] == (natural)tcr) ? "==" : "!=",
+                  (unsigned long long)(natural)tcr->db_link,
+                  (unsigned long long)(natural)tcr->catch_top,
+                  (int)tcr->valence,
+                  (unsigned long long)(natural)tcr->save_vsp,
+                  (unsigned long long)(natural)tcr->save_tsp);
+          /* catch_frame fields are at misc-biased byte offsets (ldur/stur). */
+          cfp = (LispObj *)(natural)tcr->catch_top;
+          if (cfp) {
+            char *cp = (char *)cfp;
+            fprintf(dbgout,
+                    "  catch_bytes: hdr=%llx tag=%llx link=%llx mv=%llx "
+                    "csp=%llx db=%llx xframe=%llx nfp=%llx\n",
+                    (unsigned long long)*(LispObj *)(cp - 12),
+                    (unsigned long long)*(LispObj *)(cp - 4),
+                    (unsigned long long)*(LispObj *)(cp + 4),
+                    (unsigned long long)*(LispObj *)(cp + 0xc),
+                    (unsigned long long)*(LispObj *)(cp + 0x14),
+                    (unsigned long long)*(LispObj *)(cp + 0x1c),
+                    (unsigned long long)*(LispObj *)(cp + 0x44),
+                    (unsigned long long)*(LispObj *)(cp + 0x4c));
+          }
+          /* Frame in x12 (nthrowvalues temp0) + binding chain head. */
+          {
+            char *xf = (char *)(natural)ts->__x[12];
+            natural dbl = (natural)tcr->db_link;
+            int i;
+            if (xf) {
+              fprintf(dbgout,
+                      "  x12_catch: hdr=%llx tag=%llx link=%llx db=%llx "
+                      "csp=%llx\n",
+                      (unsigned long long)*(LispObj *)(xf - 12),
+                      (unsigned long long)*(LispObj *)(xf - 4),
+                      (unsigned long long)*(LispObj *)(xf + 4),
+                      (unsigned long long)*(LispObj *)(xf + 0x1c),
+                      (unsigned long long)*(LispObj *)(xf + 0x14));
+            }
+            fprintf(dbgout, "  bindings from tcr.db_link:");
+            for (i = 0; i < 6 && dbl; i++) {
+              natural *b = (natural *)dbl;
+              fprintf(dbgout, "\n    [%d] %lx link=%lx sym=%lx val=%lx",
+                      i, (unsigned long)dbl,
+                      (unsigned long)b[0],
+                      (unsigned long)b[1],
+                      (unsigned long)b[2]);
+              if (dbl == (natural)ts->__x[0])
+                fprintf(dbgout, "  <-- TARGET");
+              dbl = b[0];
+              if (dbl < 0x1000) break;
+            }
+            fprintf(dbgout, "\n");
+          }
           fflush(dbgout);
         }
       }
