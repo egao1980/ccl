@@ -1,0 +1,8 @@
+;; Synthetic constants for modern Apple SDKs.
+;; objc.h now does `#define YES __objc_yes` / `#define NO __objc_no`
+;; (compiler builtins), so ffigen macros never evaluate to 0/1 and
+;; FILTER_FFI_MACROS=frameworks also drops usr/include/objc macros.
+;; Clozure's historical cocoa CDBs had YES=1 NO=0 from older
+;; `#define YES ((BOOL)1)`.  objc-bridge (#$YES/#$NO) needs these.
+(enum-ident ("" 0) "YES" 1)
+(enum-ident ("" 0) "NO" 0)
