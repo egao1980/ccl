@@ -861,27 +861,35 @@ be somewhat larger than what was specified)."
   (ret))                                          ; ppc:663
 
 ;;; =====================================================================
-;;; Darwin/arm64 MAP_JIT code-vector heap (AREA_CODE stand-in)
+;;; Darwin/arm64 MAP_JIT code-vector heap (AREA_CODE)
 ;;; =====================================================================
 ;;; Prefer DEFVAR with constant init ($fasl-defvar-init).  Avoid
 ;;; DEFSTATIC/DEFCONSTANT/%DEFPARAMETER random toplevel (cold-load UUO).
+;;;
+;;; All executable code (cold-load fasls + interactive compile) lives here.
+;;; Purify copies live vectors into AREA_READONLY.  Dynamic heap is never
+;;; executable — dual-map / HEAP_EXEC_BIAS is retired.  WP toggles only in
+;;; kernel C (darwin_arm64_jit_*); never call pthread_jit_write_protect_np
+;;; from lisp (NX's all MAP_JIT pages for the thread).
 
 #+(and darwinarm64-target)
 (progn
 
-;;; When NIL (cold-load / pre-purify), $fasl-code-vector uses the heap so
-;;; code is purifyable and lisp never lives in MAP_JIT (calling
-;;; pthread_jit_write_protect_np from MAP_JIT-resident lisp suicides).
-;;; Set T after purify / on the rebuild host for runtime fasl+LAP.
-(defvar *darwinarm64-map-jit-fasls* nil)
+;;; T from cold-load onward.  compile-file still emits heap code-vectors
+;;; (see arm64-lap) because MAP_JIT uvectors do not fasl-dump.
+(defvar *darwinarm64-map-jit-fasls* t)
 
 (defvar *jit-code-base* nil)
 (defvar *jit-code-limit* nil)
 (defvar *jit-code-free* nil)
 
-(defun %jit-wp (on)
-  (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
-           :int (if on 1 0) :void))
+(defun %darwinarm64-register-code-heap ()
+  "Publish MAP_JIT [base,free) to the kernel for purify."
+  (when *jit-code-base*
+    (ff-call (foreign-symbol-address "darwin_arm64_set_code_heap")
+             :address *jit-code-base*
+             :address *jit-code-free*
+             :void)))
 
 (defun %ensure-jit-code-heap ()
   (unless *jit-code-base*
@@ -896,7 +904,8 @@ be somewhat larger than what was specified)."
         (error "mmap(MAP_JIT) code heap failed"))
       (setq *jit-code-base* p
             *jit-code-limit* (%inc-ptr p len)
-            *jit-code-free* p)))
+            *jit-code-free* p)
+      (%darwinarm64-register-code-heap)))
   *jit-code-base*)
 
 (defun %allocate-code-vector (element-count)
@@ -919,6 +928,7 @@ Header/zero via kernel C (no lisp under WP).  Fill with
              :unsigned-fullword total
              :void)
     (setq *jit-code-free* next)
+    (%darwinarm64-register-code-heap)
     (%tag-as-misc free)))
 
 (defun %darwinarm64-jit-install-code (code-vector src-ivector nbytes)
@@ -934,5 +944,11 @@ in kernel C — no lisp runs while MAP_JIT pages are RW-only."
              :unsigned-fullword nbytes
              :void))
   code-vector)
+
+(defun %enable-darwinarm64-map-jit-fasls ()
+  "Ensure MAP_JIT fasl loads (default).  Kept for dumplisp / rebuild callers."
+  (setq *darwinarm64-map-jit-fasls* t)
+  (%ensure-jit-code-heap)
+  t)
 
 ) ; progn

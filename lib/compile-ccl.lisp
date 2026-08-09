@@ -615,78 +615,6 @@ not runtime errors reported by a successfully created process."
   (format stream "~&Path to source code: ~s" (truename "ccl:")))
 
 #+darwinarm64-target
-(defun %ensure-darwinarm64-map-jit-host-loader ()
-  "Install tip LAP into the live rebuild host (heap-resident).
-
-Do NOT enable MAP_JIT faslop here.  compile-ccl :full recompiles and
-reloads xdump/compiler fasls; if those loads go to MAP_JIT, later
-pthread_jit_write_protect_np from that lisp suicides (silent abort).
-MAP_JIT faslop belongs post-purify (see dumplisp / save-application).
-compile-file still emits heap code-vectors (tip LAP honors
-*compiling-file*)."
-  (let ((*load-verbose* t)
-        (*compile-verbose* nil)
-        (*save-source-locations* nil)
-        (*warn-if-redefine-kernel* nil))
-    (format t "~&;Installing Darwin/arm64 tip LAP into host (heap; no MAP_JIT faslop)~%")
-    (load "ccl:lib;arm64env.lisp")
-    (let ((old-alloc (fdefinition '%allocate-code-vector))
-          (old-install (and (fboundp '%darwinarm64-jit-install-code)
-                            (fdefinition '%darwinarm64-jit-install-code)))
-          (old-faslop (svref *fasl-dispatch-table* 2)))
-      ;; Heap-only while compiling/loading tip arm64-lap.lisp (MAP_JIT
-      ;; uvectors do not fasl-dump; a MAP_JIT-resident tip lap UDF'd).
-      (setq *darwinarm64-map-jit-fasls* nil)
-      (setf (fdefinition '%allocate-code-vector)
-            (nfunction %allocate-code-vector
-              (lambda (element-count)
-                (allocate-typed-vector :code-vector element-count))))
-      (setf (fdefinition '%darwinarm64-jit-install-code)
-            (nfunction %darwinarm64-jit-install-code
-              (lambda (code-vector src-ivector nbytes)
-                (declare (fixnum nbytes))
-                (with-macptrs ((d) (s))
-                  (%vect-data-to-macptr code-vector d)
-                  (%vect-data-to-macptr src-ivector s)
-                  (ff-call (foreign-symbol-address "memcpy")
-                           :address d :address s
-                           :unsigned-fullword nbytes :address))
-                (%make-code-executable code-vector)
-                code-vector)))
-      (setf (svref *fasl-dispatch-table* 2)
-            (nfunction $fasl-code-vector
-              (lambda (s)
-                (let* ((element-count (%fasl-read-count s))
-                       (size-in-bytes (* 4 element-count))
-                       (vector (allocate-typed-vector :code-vector element-count)))
-                  (declare (fixnum element-count size-in-bytes))
-                  (%epushval s vector)
-                  (%fasl-read-n-bytes s vector 0 size-in-bytes)
-                  (%make-code-executable vector)
-                  vector))))
-      (dolist (f (list "ccl:bin;arm64-lap.da64fsl"
-                       "ccl:bin;arm64-lap.dx64fsl"))
-        (let ((p (probe-file f)))
-          (when p (delete-file p))))
-      (load "ccl:compiler;ARM64;arm64-lap.lisp")
-      ;; Restore bin/arm64-lap.da64fsl while still heap-only (cold-load
-      ;; needs the fasl; compile after MAP_JIT alloc restore is unsafe).
-      (compile-file "ccl:compiler;ARM64;arm64-lap.lisp"
-                    :output-file "ccl:bin;arm64-lap"
-                    :verbose *load-verbose*)
-      ;; Tip images already have MAP_JIT faslop from dumplisp.  Restoring
-      ;; old-faslop would put every compile-ccl reload into MAP_JIT, and
-      ;; xdump/compiler lisp that later touches WP aborts.  Keep the heap
-      ;; faslop for the rebuild host; restore only the C helpers.
-      (setf (fdefinition '%allocate-code-vector) old-alloc)
-      (when old-install
-        (setf (fdefinition '%darwinarm64-jit-install-code) old-install))
-      ;; Intentionally do NOT restore old-faslop (may be MAP_JIT).
-      (declare (ignore old-faslop)))
-    (setq *darwinarm64-map-jit-fasls* nil)
-    (format t "~&;tip LAP on heap; MAP_JIT faslop left disabled for rebuild host~%")))
-
-#+darwinarm64-target
 (defun %darwinarm64-shell-quote (string)
   (with-output-to-string (out)
     (write-char #\' out)
@@ -733,7 +661,7 @@ xload toolchain."
 
 (defun %build-lisp-kernel (&key clean (extra-make-args nil) verbose)
   "Run make in lisp-kernel/<platform>.  EXTRA-MAKE-ARGS is a list of
-additional make arguments (e.g. \"DUAL_MAP=1\")."
+additional make arguments."
   (let* ((kdir (format nil "lisp-kernel/~a" (kernel-build-directory)))
          (j (format nil "~d" (1+ (cpu-count)))))
     (when clean
@@ -798,10 +726,9 @@ the lisp and run REBUILD-CCL again.")
                                            :type (pathname-type *.fasl-pathname*))
                             "ccl:**;")))
                  (delete-file f)))
-             ;; Host still has level-0 faslops until xload; install MAP_JIT
-             ;; loader before compile-ccl so the first rebuild is fast.
              #+darwinarm64-target
-             (%ensure-darwinarm64-map-jit-host-loader)
+             (when (fboundp '%enable-darwinarm64-map-jit-fasls)
+               (%enable-darwinarm64-map-jit-fasls))
              (with-global-optimization-settings ()
                (compile-ccl (not (null force)))
                ;; Native xload: Darwin nil-value is owned by
@@ -809,7 +736,6 @@ the lisp and run REBUILD-CCL again.")
                #+darwinarm64-target
                (progn
                  (ensure-darwinarm64-target-arch)
-                 ;; Keep host/target pointers on the Darwin backend object.
                  (setq *arm64-backend* *darwinarm64-backend*
                        *host-backend* *darwinarm64-backend*
                        *target-backend* *darwinarm64-backend*)
@@ -822,89 +748,37 @@ the lisp and run REBUILD-CCL again.")
                #-darwinarm64-target
                (if force (xload-level-0 :force) (xload-level-0)))
              (when kernel
-               ;; Darwin/arm64: cold-load of arm64-boot.image still has impure
-               ;; heap code-vectors, so it needs DUAL_MAP=1.  After
-               ;; save-application :purify t, rebuild production DUAL_MAP=0.
-               ;; Object files are not CDEFINES-aware — always make clean when
-               ;; flipping DUAL_MAP (and between the two builds below).
-               #+darwinarm64-target
-               (%build-lisp-kernel :clean t
-                                   :extra-make-args '("DUAL_MAP=1")
-                                   :verbose verbose)
-               #-darwinarm64-target
                (%build-lisp-kernel :clean (or clean force) :verbose verbose))
              (when reload
                (let* ((old-write-date
                        (or (ignore-errors (file-write-date (standard-image-name)))
-                           0))
-                      #+darwinarm64-target
-                      (save-script
-                       (merge-pathnames "tools/save-darwinarm64-image.lisp"
-                                        (current-directory))))
-                 ;; Darwin/arm64: after a MAP_JIT-heavy compile-ccl, a single
-                 ;; run-program/fork has occasionally returned with pid NIL
-                 ;; and status still :running ("Bug: fork failed but status
-                 ;; field not set?").  Retry; use the file driver so stdin
-                 ;; is a real fd (matches tools/rebuild-darwinarm64-unbiased.sh).
-                 #+darwinarm64-target
-                 (progn
-                   (gc)
-                   (unless (probe-file save-script)
-                     (error "missing ~s" save-script))
-                   (let ((ok nil) (last-out "") (last-status nil) (last-code nil))
-                     (dotimes (attempt 5)
-                       (format t "~&;Cold-load/purify save attempt ~d ...~%"
-                               (1+ attempt))
-                       (force-output)
-                       (handler-case
-                           (with-open-file (cmd save-script :direction :input)
-                             (with-output-to-string (output)
-                               (let* ((proc (run-program
-                                             (format nil "./~a"
-                                                     (standard-kernel-name))
-                                             (list* "--image-name"
-                                                    (standard-boot-image-name)
-                                                    "--no-init"
-                                                    "--batch"
-                                                    reload-arguments)
-                                             :input cmd
-                                             :output output
-                                             :error output))
-                                      (st (external-process-status proc))
-                                      (code (external-process-%exit-code proc)))
-                                 (setq last-status st last-code code
-                                       last-out (get-output-stream-string output))
-                                 (when (and (eq st :exited) (eql code 0))
-                                   (setq ok t)))))
-                         (error (e)
-                           (setq last-out (format nil "~a" e)
-                                 last-status :error
-                                 last-code -1)))
-                       (when ok (return))
-                       (sleep 1))
-                     (unless ok
-                       (error "Errors (~s ~s) reloading boot image:~&~a"
-                              last-status last-code last-out))
-                     (let* ((write-date
-                             (or (ignore-errors
-                                   (file-write-date (standard-image-name)))
-                                 0)))
-                       (unless (and write-date (> write-date old-write-date))
-                         (error "The heap image ~a does not appear to have been written correctly.  This may indicate a problem with the bootstapping image."
-                                (standard-image-name)))
-                       (format t "~&;Wrote heap image: ~s"
-                               (truename (format nil "ccl:~a"
-                                                 (standard-image-name))))
-                       (when verbose
-                         (format t "~&;Reload heap image output:~%~a"
-                                 last-out)))))
-                 #-darwinarm64-target
-                 (with-input-from-string (cmd (format nil
-                                                "(save-application ~s)"
-                                                (standard-image-name)))
-                   (with-output-to-string (output)
-                     (multiple-value-bind (status exit-code)
-                         (external-process-status
+                           0)))
+                 ;; Darwin save script: clear deferred-warnings + :purify t
+                 ;; (AREA_CODE → AREA_READONLY). Stock platforms use a
+                 ;; one-liner save-application.
+                 (with-output-to-string (output)
+                   (multiple-value-bind (status exit-code)
+                       (external-process-status
+                        #+darwinarm64-target
+                        (let ((save-script
+                               (merge-pathnames "tools/save-darwinarm64-image.lisp"
+                                                (current-directory))))
+                          (unless (probe-file save-script)
+                            (error "missing ~s" save-script))
+                          (with-open-file (cmd save-script :direction :input)
+                            (run-program
+                             (format nil "./~a" (standard-kernel-name))
+                             (list* "--image-name" (standard-boot-image-name)
+                                    "--no-init"
+                                    "--batch"
+                                    reload-arguments)
+                             :input cmd
+                             :output output
+                             :error output)))
+                        #-darwinarm64-target
+                        (with-input-from-string
+                            (cmd (format nil "(save-application ~s)"
+                                         (standard-image-name)))
                           (run-program
                            (format nil "./~a" (standard-kernel-name))
                            (list* "--image-name" (standard-boot-image-name)
@@ -913,27 +787,21 @@ the lisp and run REBUILD-CCL again.")
                                   reload-arguments)
                            :input cmd
                            :output output
-                           :error output))
-                       (if (and (eq status :exited)
-                                (eql exit-code 0))
-                         (let* ((write-date (or (ignore-errors (file-write-date (standard-image-name))) 0)))
-                           (unless (and write-date (> write-date old-write-date))
-                             (error "The heap image ~a does not appear to have been written correctly.  This may indicate a problem with the bootstapping image." (standard-image-name)))
-                           (format t "~&;Wrote heap image: ~s"
-                                   (truename (format nil "ccl:~a"
-                                                     (standard-image-name))))
-                           (when verbose
-                             (format t "~&;Reload heap image output:~%~a"
-                                     (get-output-stream-string output))))
-                         (error "Errors (~s ~s) reloading boot image:~&~a"
-                                status exit-code
-                                (get-output-stream-string output))))))))
-             ;; Production kernel after purify (DUAL_MAP=0 default).
-             #+darwinarm64-target
-             (when (and kernel reload)
-               (%build-lisp-kernel :clean t
-                                   :extra-make-args '("DUAL_MAP=0")
-                                   :verbose verbose))
+                           :error output)))
+                     (if (and (eq status :exited)
+                              (eql exit-code 0))
+                       (let* ((write-date (or (ignore-errors (file-write-date (standard-image-name))) 0)))
+                         (unless (and write-date (> write-date old-write-date))
+                           (error "The heap image ~a does not appear to have been written correctly.  This may indicate a problem with the bootstapping image." (standard-image-name)))
+                         (format t "~&;Wrote heap image: ~s"
+                                 (truename (format nil "ccl:~a"
+                                                   (standard-image-name))))
+                         (when verbose
+                           (format t "~&;Reload heap image output:~%~a"
+                                   (get-output-stream-string output))))
+                       (error "Errors (~s ~s) reloading boot image:~&~a"
+                              status exit-code
+                              (get-output-stream-string output)))))))
              (when exit
                (quit)))
         (setf (current-directory) cd)))))

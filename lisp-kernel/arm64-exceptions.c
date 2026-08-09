@@ -56,6 +56,7 @@
 #include "threads.h"              /* ppc-exceptions.c:49 */
 
 #ifdef DARWIN
+#include "memprotect.h"
 extern Boolean use_mach_exception_handling;
 void signal_handler(int, siginfo_t *, ExceptionInformation *, TCR *, int);
 #endif
@@ -1282,67 +1283,28 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
   }
 
 #if defined(DARWIN) && defined(ARM64)
-  /* Darwin W^X: IMAGE_BASE heap is RW; executable view is either
-     (a) DARWIN_ARM64_DUAL_MAP=1: eager RX alias at VA+HEAP_EXEC_BIAS,
-         NX on canonical → redirect PC += bias (no remap in the handler);
-     (b) =0: same redirect on canonical NX; create the alias only if the
-         biased PC then faults (below).  Remapping on every canonical NX
-         made compile-ccl spend >90% of CPU in mach_vm_remap. */
+  /* Dual-map / HEAP_EXEC_BIAS retired: dynamic heap is never executable.
+     Executable code is MAP_JIT (darwin_arm64_code_*) or AREA_READONLY.
+     An NX fetch into IMAGE_BASE heap is a hard bug. */
   if (xp) {
     natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
     unsigned ec = (unsigned)((esr >> 26) & 0x3f);
     natural pcval = (natural)xpPC(xp);
     natural far = (natural)addr;
-    natural page = (natural)1 << log2_page_size;
-    natural page_mask = page - 1;
-    static __thread int nx_redirect_depth;
     Boolean insn_abort = (ec == 0x20 || ec == 0x21);
 
     if (insn_abort &&
         pcval == far &&
         pcval >= (natural)IMAGE_BASE_ADDRESS &&
-        pcval < ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
-      if (nx_redirect_depth > 2) {
-        fprintf(dbgout,
-                "\nFATAL: NX redirect recursion at 0x%lx (fork/RX inherit?)\n",
-                (unsigned long)pcval);
-        _exit(158);
-      }
-      if (darwin_arm64_pc_in_code_vector(pcval)) {
-        nx_redirect_depth++;
-        set_xpPC(xp, (pc)(pcval + HEAP_EXEC_BIAS));
-        nx_redirect_depth--;
-        return 0;
-      }
+        !darwin_arm64_in_code_heap((void *)pcval)) {
       fprintf(dbgout,
-              "\nFATAL (cold load): NX fetch into non-code at 0x%lx\n",
+              "\nFATAL: NX fetch into non-code heap at 0x%lx\n",
               (unsigned long)pcval);
       cold_load_dump_frame(xp);
       darwin_arm64_describe_pc_object(pcval);
       darwin_arm64_describe_fn(xpGPR(xp, 7));
       _exit(157);
     }
-
-#if !DARWIN_ARM64_DUAL_MAP
-    /* Bias-band fault: alias missing or not yet RX.  Remap once, then
-       retry the biased PC.  Steady-state impure calls only take the
-       canonical NX→redirect path above. */
-    if (pcval >= ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS) &&
-        pcval < ((natural)IMAGE_BASE_ADDRESS + 2 * (natural)HEAP_EXEC_BIAS) &&
-        (far == pcval || !insn_abort)) {
-      natural canon = pcval - (natural)HEAP_EXEC_BIAS;
-      LogicalAddress base = (LogicalAddress)(canon & ~page_mask);
-      if (darwin_arm64_pc_in_code_vector(canon)) {
-        if (!darwin_arm64_remap_exec_alias(base, page)) {
-          fprintf(dbgout,
-                  "\nFATAL: on-demand RX alias failed for bias PC 0x%lx\n",
-                  (unsigned long)pcval);
-          _exit(157);
-        }
-        return 0;
-      }
-    }
-#endif
   }
 #endif
 
@@ -1652,9 +1614,6 @@ uuo_cold_load_fatal(ExceptionInformation *xp, pc where, opcode the_uuo,
           (unsigned long)xpGPR(xp, gpr));
   cold_load_dump_frame(xp);
 #if defined(DARWIN) && defined(ARM64)
-  if (pcval >= ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
-    pcval -= (natural)HEAP_EXEC_BIAS;
-  }
   darwin_arm64_describe_pc_object(pcval);
   darwin_arm64_describe_fn(xpGPR(xp, 7));
   darwin_arm64_describe_fn(xpGPR(xp, 14)); /* nfn = temp2 */
@@ -1681,9 +1640,6 @@ pv_cold_load_fatal(ExceptionInformation *xp, BytePtr addr, Boolean is_write)
           (unsigned long)pcval, (unsigned long)(natural)addr);
   cold_load_dump_frame(xp);
 #if defined(DARWIN) && defined(ARM64)
-  if (pcval >= ((natural)IMAGE_BASE_ADDRESS + (natural)HEAP_EXEC_BIAS)) {
-    pcval -= (natural)HEAP_EXEC_BIAS;
-  }
   darwin_arm64_describe_pc_object(pcval);
   darwin_arm64_describe_fn(xpGPR(xp, 7));
   /* Dump a few words before the faulting store for context. */

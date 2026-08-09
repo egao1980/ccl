@@ -37,7 +37,7 @@
         (and (boundp '*xload-default-backend*)
              (backend-xload-info-name *xload-default-backend*)))
 
-(%ensure-darwinarm64-map-jit-host-loader)
+(%enable-darwinarm64-map-jit-fasls)
 
 (format t "~&;; native xload-level-0 :force~%")
 (force-output)

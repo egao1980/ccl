@@ -1,15 +1,21 @@
 # Progress notes on an arm64 port
 
 
+## August 2026 — AREA_CODE / dual-map retired
+
+* Executable code = MAP_JIT code heap (`darwin_arm64_set_code_heap`) from
+  cold-load; purify copies into `AREA_READONLY` (RX). Dynamic heap is RW only.
+* Removed `HEAP_EXEC_BIAS` NX redirect, `mach_vm_remap` aliases, and
+  `rebuild-ccl` DUAL_MAP 1→0 two-phase kernel / host faslop surgery.
+* WP only in kernel C (`darwin_arm64_jit_*`). `*darwinarm64-map-jit-fasls*`
+  defaults to T. compile-file still emits heap vectors (fasl dump).
+* Gate: `./tools/rebuild-darwinarm64-unbiased.sh` (single kernel) and
+  stock-shaped `(rebuild-ccl :full t)`.
+
 ## August 2026 — architecture stop (do not circle)
 
-* **Do not** keep flipping MAP_JIT faslop on/off for the rebuild host.
-  Constraint is structural: MAP_JIT-resident lisp cannot toggle WP.
-  Host fasls stay on the heap until a real code-only area exists.
-* **Do not** treat `tools/rebuild-darwinarm64-unbiased.sh` as done.
-  Done = stock `(rebuild-ccl :full t)` + bare require, no surgical reload.
-* Dual-map / `HEAP_EXEC_BIAS` = cold-load scaffolding only; retire toward
-  purify + AREA_CODE (Clozure/ccl#11 / SBCL-style protocol, not source copy).
+* Superseded by AREA_CODE retirement above (2026-08-09).
+
 ## August 2026 — unbiased + DUAL_MAP=0
 
 * `darwinarm64-heap-exec-bias-p` stays `nil` (vinsns no longer overrides backend).

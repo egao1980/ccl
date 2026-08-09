@@ -33,21 +33,12 @@ typedef ucontext_t ExceptionInformation;
 /*
  * W^X policy (Darwin/arm64):
  *   * Purified / AREA_READONLY code → mprotect RX at the canonical VA
- *   * Runtime compile → MAP_JIT + pthread_jit_write_protect_np
- *   * HEAP_EXEC_BIAS address band = RX aliases of IMAGE_BASE pages for
- *     legacy biased call sites / impure heap code.
- *
- * DARWIN_ARM64_DUAL_MAP:
- *   0 (default) — production: purify RX + MAP_JIT; on-demand RX alias
- *     with retry cap for any remaining impure heap code.
- *   1 — eager mach_vm_remap; NX handler redirects PC += bias.
- *     make CDEFINES_EXTRA=-DDARWIN_ARM64_DUAL_MAP=1 for legacy biased images.
+ *   * Cold-load + runtime code → MAP_JIT code heap (AREA_CODE stand-in)
+ *     via darwin_arm64_set_code_heap; purify copies into AREA_READONLY.
+ *   * Dynamic heap is never executable.  Dual-map / HEAP_EXEC_BIAS retired.
  */
 #ifndef DARWIN_ARM64_DUAL_MAP
 #define DARWIN_ARM64_DUAL_MAP 0
-#endif
-#ifndef HEAP_EXEC_BIAS
-#define HEAP_EXEC_BIAS 0x004000000000ULL
 #endif
 
 #include "lisptypes.h"

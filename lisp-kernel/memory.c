@@ -34,9 +34,6 @@
 #include <pthread.h>
 #if defined(ARM64)
 #include <libkern/OSCacheControl.h>
-#include <mach/mach.h>
-#include <mach/mach_vm.h>
-#include <mach/mach_error.h>
 #endif
 #endif
 
@@ -55,75 +52,32 @@
 #define DEBUG_MEMORY 0
 
 #if defined(DARWIN) && defined(ARM64)
-/* RX alias of lisp image/heap pages at VA+HEAP_EXEC_BIAS.  Used for
-   eager dual-map (DARWIN_ARM64_DUAL_MAP=1) and on-demand creation when
-   legacy biased call sites jump into the bias band.
+/* MAP_JIT code heap (AREA_CODE stand-in).  Executable lisp lives here or
+   in AREA_READONLY after purify — never in the RW dynamic heap.  Dual-map
+   / HEAP_EXEC_BIAS is retired. */
+BytePtr darwin_arm64_code_low = NULL;
+BytePtr darwin_arm64_code_active = NULL;
 
-   Under DM=0 the NX handler redirects every canonical entry into impure
-   heap code without remapping; this helper runs from
-   xMakeDataExecutable / image load / GC relocate so the alias exists
-   before the first fetch.  Do not region-probe-skip: stale RX pages
-   at bias (zeros) caused udf #0. */
-Boolean
-darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
+void
+darwin_arm64_set_code_heap(void *low, void *active)
 {
-  mach_vm_address_t rx;
-  vm_prot_t cur = 0, max = 0;
-  kern_return_t kr;
+  darwin_arm64_code_low = (BytePtr)low;
+  darwin_arm64_code_active = (BytePtr)active;
+}
 
-  if (len == 0) {
-    return true;
-  }
-  if ((natural)start < (natural)IMAGE_BASE_ADDRESS) {
-    return true;
-  }
-  rx = (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
-  /* Always mach_vm_remap.  A region-probe "already RX" skip was a
-     serious correctness hazard: stale bias pages (zeros) still look
-     executable, and a leading-word/memcmp match can false-positive
-     when both sides start with the code-vector udf#0 sentinel — NX
-     then redirects into udf #0.  Remap is only on the make-executable
-     / image-load path now (NX handler is redirect-only under DM=0),
-     so the old remap-every-fault cost does not return. */
-  /* VM_INHERIT_SHARE: fork must keep the RX alias.  INHERIT_NONE left
-     children with RW heap only; return-from-fork at a biased PC (or NX
-     redirect into the missing alias) infinite-looped in the fault
-     handler — breaking run-program / ANSI tests. */
-  kr = mach_vm_remap(mach_task_self(),
-                     &rx,
-                     (mach_vm_size_t)len,
-                     0,
-                     VM_FLAGS_FIXED | VM_FLAGS_OVERWRITE,
-                     mach_task_self(),
-                     (mach_vm_address_t)(natural)start,
-                     FALSE,
-                     &cur,
-                     &max,
-                     VM_INHERIT_SHARE);
-  if (kr != KERN_SUCCESS) {
-    fprintf(dbgout,
-            "darwinarm64: mach_vm_remap RX alias failed (%d %s) at %p len 0x%lx\n",
-            kr, mach_error_string(kr), start, (unsigned long)len);
-    return false;
-  }
-  kr = mach_vm_protect(mach_task_self(),
-                       rx,
-                       (mach_vm_size_t)len,
-                       FALSE,
-                       VM_PROT_READ | VM_PROT_EXECUTE);
-  if (kr != KERN_SUCCESS) {
-    fprintf(dbgout,
-            "darwinarm64: mach_vm_protect RX failed (%d %s) at 0x%llx\n",
-            kr, mach_error_string(kr), (unsigned long long)rx);
-    return false;
-  }
-  return true;
+Boolean
+darwin_arm64_in_code_heap(void *p)
+{
+  BytePtr bp = (BytePtr)p;
+  return (darwin_arm64_code_low != NULL &&
+          bp >= darwin_arm64_code_low &&
+          bp < darwin_arm64_code_active);
 }
 
 /* Install nbytes from src into a MAP_JIT code-vector payload at dest.
-   WP toggles stay in C so no lisp (including MAP_JIT-resident helpers)
-   runs while JIT pages are non-executable — required for fasl load and
-   LAP emit once fasls also live in MAP_JIT. */
+   WP toggles stay in C so MAP_JIT-resident lisp is executable again
+   before return (pthread_jit_write_protect_np(0) NX's all JIT pages
+   for this thread). */
 void
 darwin_arm64_jit_install_code(void *dest, const void *src, size_t nbytes)
 {
@@ -254,19 +208,13 @@ CommitMemory (LogicalAddress start, natural len)
 
   for (i = 0; i < 3; i++) {
 #if defined(DARWIN) && defined(ARM64)
-    /* W^X: RWX mmap is rejected.  Map RW; optional dual-map RX alias
-       when DARWIN_ARM64_DUAL_MAP (impure heap code).  Production uses
-       purify RX + MAP_JIT instead. */
+    /* W^X: RWX mmap is rejected.  Dynamic heap is RW only; executable
+       code lives in MAP_JIT (AREA_CODE) or AREA_READONLY after purify. */
     addr = mmap(start, len, MEMPROTECT_RW, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
 #else
     addr = mmap(start, len, MEMPROTECT_RWX, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
 #endif
     if (addr == start) {
-#if defined(DARWIN) && defined(ARM64) && DARWIN_ARM64_DUAL_MAP
-      if (!darwin_arm64_remap_exec_alias(start, len)) {
-        return false;
-      }
-#endif
       return true;
     } else {
       mmap(addr, len, MEMPROTECT_NONE, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0);
@@ -290,14 +238,6 @@ UnCommitMemory (LogicalAddress start, natural len) {
   }
 #else
   if (len) {
-#if defined(DARWIN) && defined(ARM64)
-    /* Drop RX alias if present (eager or on-demand). */
-    if ((natural)start >= (natural)IMAGE_BASE_ADDRESS) {
-      mach_vm_address_t rx =
-        (mach_vm_address_t)((natural)start + HEAP_EXEC_BIAS);
-      (void)mach_vm_deallocate(mach_task_self(), rx, (mach_vm_size_t)len);
-    }
-#endif
     madvise(start, len, MADV_DONTNEED);
     if (mmap(start, len, MEMPROTECT_NONE, MAP_PRIVATE|MAP_ANON|MAP_FIXED, -1, 0)
 	!= start) {
@@ -402,13 +342,6 @@ ProtectMemory(LogicalAddress addr, natural nbytes)
     if (status == ENOMEM) {
       void *mapaddr = mmap(addr,nbytes, prot, MAP_ANON|MAP_PRIVATE|MAP_FIXED,-1,0);
       if (mapaddr != MAP_FAILED) {
-#if defined(DARWIN) && defined(ARM64)
-        if ((natural)addr >= (natural)IMAGE_BASE_ADDRESS) {
-          mach_vm_address_t rx =
-            (mach_vm_address_t)((natural)addr + HEAP_EXEC_BIAS);
-          (void)mach_vm_deallocate(mach_task_self(), rx, (mach_vm_size_t)nbytes);
-        }
-#endif
         return 0;
       }
     }

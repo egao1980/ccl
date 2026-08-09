@@ -3,9 +3,8 @@
 ;;;;   ./darm64cl --image-name arm64-boot.image --no-init --batch \
 ;;;;     < tools/save-darwinarm64-image.lisp
 ;;;;
-;;;; Production save uses :purify t — pure code is RX at the canonical
-;;;; VA; fasl/runtime compile uses MAP_JIT.  Dual-map is off
-;;;; (DARWIN_ARM64_DUAL_MAP=0).
+;;;; Production save uses :purify t — copies MAP_JIT AREA_CODE into
+;;;; AREA_READONLY (RX at canonical VA).  Dual-map is retired.
 ;;;;
 ;;;; Clear *outstanding-deferred-warnings* before dump: saving from inside
 ;;;; with-compilation-unit (compile-ccl) otherwise leaves a parent unit in
@@ -14,5 +13,7 @@
 (in-package "CCL")
 
 (setq *outstanding-deferred-warnings* nil)
-(format t "~&;; save-application darm64cl.image :purify t~%")
+(when (fboundp '%darwinarm64-register-code-heap)
+  (%darwinarm64-register-code-heap))
+(format t "~&;; save-application darm64cl.image :purify t (AREA_CODE)~%")
 (save-application "darm64cl.image" :purify t)

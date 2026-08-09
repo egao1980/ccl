@@ -81,7 +81,13 @@ MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int f
 void allocation_failure(Boolean pointerp, natural size);
 
 #if defined(DARWIN) && defined(ARM64)
-Boolean darwin_arm64_remap_exec_alias(LogicalAddress start, natural len);
+/* AREA_CODE stand-in: MAP_JIT code heap bounds (lisp registers via
+   darwin_arm64_set_code_heap).  Purify copies live code from here into
+   AREA_READONLY; the dynamic heap is never executable. */
+extern BytePtr darwin_arm64_code_low;
+extern BytePtr darwin_arm64_code_active;
+void darwin_arm64_set_code_heap(void *low, void *active);
+Boolean darwin_arm64_in_code_heap(void *p);
 void darwin_arm64_jit_install_code(void *dest, const void *src, size_t nbytes);
 void darwin_arm64_jit_init_code_vector(void *dest, unsigned long long header, size_t total_bytes);
 #endif

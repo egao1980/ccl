@@ -102,15 +102,13 @@
     (declare (fixnum i constants-size))
     (let* ((code-vector
             (cond
-              ;; Native Darwin/arm64 interactive compile: MAP_JIT (canonical VA).
+              ;; Native Darwin/arm64 interactive compile: MAP_JIT (AREA_CODE).
               ;; compile-file must use the heap — MAP_JIT uvectors are outside
-              ;; the lisp heap (printer: BOGUS) and do not survive fasl dump,
-              ;; which produced broken native arm64-boot.image / empty fasls.
+              ;; the lisp heap and do not survive fasl dump.
               #+(and darwinarm64-target)
               ((and (not cross-compiling)
                     (not *compiling-file*)
-                    (boundp '*darwinarm64-map-jit-fasls*)
-                    *darwinarm64-map-jit-fasls*)
+                    (fboundp '%allocate-code-vector))
                (%allocate-code-vector (+ code-vector-size prefix-size)))
               (t
                (%alloc-misc
@@ -122,8 +120,8 @@
            (use-jit-blit
             (and (not cross-compiling)
                  (not *compiling-file*)
-                 (boundp '*darwinarm64-map-jit-fasls*)
-                 *darwinarm64-map-jit-fasls*))
+                 (fboundp '%darwinarm64-jit-install-code)
+                 (fboundp '%allocate-code-vector)))
            #+darwinarm64-target
            (scratch
             (when use-jit-blit
@@ -153,11 +151,12 @@
             (uvref constants-vector 0) code-vector)
       ;; Match ARM32/PPC: flush I/D cache before execution.
       ;; Darwin/arm64 MAP_JIT blit path already icaches in jit_install_code.
+      ;; compile-file heap vectors are fasl payload only — not executed.
       (unless cross-compiling
         #-darwinarm64-target
         (%make-code-executable code-vector)
         #+darwinarm64-target
-        (unless use-jit-blit
+        (unless (or use-jit-blit *compiling-file*)
           (%make-code-executable code-vector)))
       ;; %alloc-misc returns a misc-tagged vector; hand the resident
       ;; (non-cross) path to function-vector-to-function so both ends name

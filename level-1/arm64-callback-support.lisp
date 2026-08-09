@@ -34,10 +34,10 @@
 
 #+(and darwin-target arm64-target)
 (defun %darwin-jit-write-protect (enabled)
-  "Toggle Apple Silicon MAP_JIT W^X. enabled=T => executable; NIL => writable."
-  (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
-           :int (if enabled 1 0)
-           :void))
+  "Unused — WP stays in kernel C (darwin_arm64_jit_*). Kept so old
+callers bind without error."
+  (declare (ignore enabled))
+  nil)
 
 (defun make-callback-trampoline (index &optional info)
   (declare (ignorable info))

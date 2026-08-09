@@ -82,11 +82,10 @@
 
 ;;; Darwin/arm64 MAP_JIT helpers for the compiler (arm64-lap loads after
 ;;; arm64env).  Level-0 arm64-utils owns the same defs for the boot image.
-;;; Do not redefine live helpers (old LAP + %jit-wp mid-rebuild SEGVs).
+;;; Do not redefine live helpers mid-rebuild.
 ;;;
-;;; Do NOT install the MAP_JIT faslop at arm64env load time: during cold-load
-;;; that would put later fasls (and WP helpers) into MAP_JIT before purify.
-;;; rebuild-ccl / save-application call %enable-darwinarm64-map-jit-fasls.
+;;; AREA_CODE: executable code is MAP_JIT from cold-load; purify copies
+;;; into AREA_READONLY.  Dual-map retired.  WP only in kernel C.
 #+(and darwinarm64-target)
 (progn
   (defvar *jit-code-base* nil)
@@ -94,12 +93,15 @@
   (defvar *jit-code-free* nil)
 
   (unless (boundp '*darwinarm64-map-jit-fasls*)
-    (defvar *darwinarm64-map-jit-fasls* nil))
+    (defvar *darwinarm64-map-jit-fasls* t))
 
-  (unless (fboundp '%jit-wp)
-    (defun %jit-wp (on)
-      (ff-call (foreign-symbol-address "pthread_jit_write_protect_np")
-               :int (if on 1 0) :void)))
+  (unless (fboundp '%darwinarm64-register-code-heap)
+    (defun %darwinarm64-register-code-heap ()
+      (when *jit-code-base*
+        (ff-call (foreign-symbol-address "darwin_arm64_set_code_heap")
+                 :address *jit-code-base*
+                 :address *jit-code-free*
+                 :void))))
 
   (unless (fboundp '%ensure-jit-code-heap)
     (defun %ensure-jit-code-heap ()
@@ -115,7 +117,8 @@
             (error "mmap(MAP_JIT) code heap failed"))
           (setq *jit-code-base* p
                 *jit-code-limit* (%inc-ptr p len)
-                *jit-code-free* p)))
+                *jit-code-free* p)
+          (%darwinarm64-register-code-heap)))
       *jit-code-base*))
 
   (unless (fboundp '%allocate-code-vector)
@@ -137,6 +140,7 @@
                  :unsigned-fullword total
                  :void)
         (setq *jit-code-free* next)
+        (%darwinarm64-register-code-heap)
         (%tag-as-misc free))))
 
   (unless (fboundp '%darwinarm64-jit-install-code)
@@ -154,22 +158,9 @@
       code-vector))
 
   (defun %enable-darwinarm64-map-jit-fasls ()
-    "Install MAP_JIT $fasl-code-vector for subsequent loads.  Safe only once
-cold-load is done (purified image) or on a rebuild host before compile-ccl."
+    "Ensure MAP_JIT fasl loads (default under AREA_CODE)."
     (setq *darwinarm64-map-jit-fasls* t)
-    (setf (svref *fasl-dispatch-table* 2)
-          (nfunction $fasl-code-vector
-            (lambda (s)
-              (let* ((element-count (%fasl-read-count s))
-                     (size-in-bytes (* 4 element-count))
-                     (vector (%allocate-code-vector element-count)))
-                (declare (fixnum element-count size-in-bytes))
-                (%epushval s vector)
-                (let ((scratch (make-array size-in-bytes
-                                           :element-type '(unsigned-byte 8))))
-                  (%fasl-read-n-bytes s scratch 0 size-in-bytes)
-                  (%darwinarm64-jit-install-code vector scratch size-in-bytes))
-                vector))))
+    (%ensure-jit-code-heap)
     t)
   )
 

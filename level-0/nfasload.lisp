@@ -687,12 +687,12 @@
 (deffaslop $fasl-code-vector (s)
   (let* ((element-count (%fasl-read-count s))
          (size-in-bytes (* 4 element-count))
-         ;; Darwin/arm64: MAP_JIT only when *darwinarm64-map-jit-fasls* is T
-         ;; (purified image / rebuild host).  Cold-load must use the heap so
-         ;; code is purifyable; MAP_JIT-resident lisp that toggles WP dies.
+         ;; Darwin/arm64 AREA_CODE: MAP_JIT for executable fasl code.
+         ;; Purify copies into AREA_READONLY.  Flag defaults to T.
          (use-jit #+darwinarm64-target
                   (and (boundp '*darwinarm64-map-jit-fasls*)
-                       *darwinarm64-map-jit-fasls*)
+                       *darwinarm64-map-jit-fasls*
+                       (fboundp '%allocate-code-vector))
                   #-darwinarm64-target
                   nil)
          (vector (if use-jit

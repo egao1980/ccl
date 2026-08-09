@@ -440,14 +440,11 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
           ProtectMemory(a->low, a->active-a->low);
         }
 #if defined(DARWIN) && defined(ARM64)
-        /* Mapped RW due to W^X; pure code needs RX.
+        /* Mapped RW due to W^X; pure code needs RX on the canonical VA.
            Span must be OS-page-aligned (16KiB on Apple Silicon). */
         if (a->active > a->low) {
           natural span = align_to_power_of_2(a->active - a->low, log2_page_size);
           mprotect(a->low, span, PROT_READ|PROT_EXEC);
-          /* Legacy compiled code may still add HEAP_EXEC_BIAS before
-             br/blr.  Alias only the pure span — not the whole heap. */
-          (void)darwin_arm64_remap_exec_alias(a->low, span);
         }
 #endif
         readonly_area = a;
