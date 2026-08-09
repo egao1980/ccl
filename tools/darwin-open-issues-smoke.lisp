@@ -109,8 +109,8 @@
   (unwind-protect (return-from b 42)
     (let ((ctx (%throwing-through-cleanup-p)))
       (format t "~&return-from ctx=~s~%" ctx)
-      (unless (and (consp ctx) (eql (cadr ctx) 42))
-        (error "return-from ctx ~s" ctx)))))
+      (when ctx
+        (error "return-from ctx ~s (expected nil)" ctx)))))
 
-(format t "~&OPEN-ISSUES-SMOKE-OK~%")
+(format t "~&DARWIN-OPEN-ISSUES-SMOKE-OK~%")
 (quit 0)

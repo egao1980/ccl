@@ -48,12 +48,13 @@
       (error "normal uwp expected nil, got ~s" (%throwing-through-cleanup-p)))
     (format t "~&normal-uwp=NIL~%")))
 
+;; return-from shares nthrow1value with normal uwp exit — not throwing
+;; for :propagate-throw (x86 parity).
 (block b
   (unwind-protect (return-from b 42)
-    (let ((ctx (%throwing-through-cleanup-p)))
-      (unless (and (consp ctx) (eql (cadr ctx) 42))
-        (error "return-from ctx ~s" ctx))
-      (format t "~&return-from=~s~%" ctx))))
+    (when (%throwing-through-cleanup-p)
+      (error "return-from uwp expected nil, got ~s" (%throwing-through-cleanup-p)))
+    (format t "~&return-from=NIL~%")))
 
 (format t "~&DARWIN-CLEAN-BUILD-SMOKE-OK~%")
 (quit 0)

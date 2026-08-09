@@ -43,14 +43,16 @@
   (unwind-protect 'ok
     (check "normal" nil)))
 
+;; return-from uses nthrow1value (same tsp shape as normal uwp exit);
+;; match x86: not reported as throwing-through-cleanup.
 (block b
   (unwind-protect (return-from b 'RB)
-    (check "return-from" t :values '(RB))))
+    (check "return-from" nil)))
 
 (catch 'a
   (catch 'b
     (unwind-protect (throw 'a 7)
       (check "throw-skip" t :tag 'a :values '(7)))))
 
-(format t "~&THROWING-CLEANUP-OK~%")
+(format t "~&THROWING-CLEANUP-SMOKE-OK~%")
 (quit 0)

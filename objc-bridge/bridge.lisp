@@ -943,31 +943,47 @@
                   (symbol-name name) args))))))
                                              
 
+;;; Arm64: rlet of :objc_super in a &rest frame is clobbered by apply's
+;;; stack traffic (super_class → garbage → objc_msgSendSuper hang/recurse
+;;; on #/init + call-next-method).  Keep the super struct on the heap.
 (defun %call-next-objc-method (self class selector sig &rest args)
   (declare (dynamic-extent args))
-  (rlet ((s :objc_super #+(or apple-objc cocotron-objc) :receiver #+gnu-objc :self self
-            #+(or apple-objc-2.0 cocotron-objc)  :super_class #-(or apple-objc-2.0 cocotron-objc) :class
-            #+(or apple-objc-2.0 cocotron-objc) (#_class_getSuperclass class)
-            #-(or apple-objc-2.0 cocotron-objc) (pref class :objc_class.super_class)))
-    (let* ((siginfo (objc-method-signature-info sig))
-           (function (or (objc-method-signature-info-super-function siginfo)
-                         (setf (objc-method-signature-info-super-function siginfo)
-                               (%compile-send-function-for-signature sig t)))))
-      (with-ns-exceptions-as-errors
-          (apply function s selector args)))))
+  (let* ((siginfo (objc-method-signature-info sig))
+         (function (or (objc-method-signature-info-super-function siginfo)
+                       (setf (objc-method-signature-info-super-function siginfo)
+                             (%compile-send-function-for-signature sig t))))
+         (s (make-record :objc_super
+                         #+(or apple-objc cocotron-objc) :receiver #+gnu-objc :self self
+                         #+(or apple-objc-2.0 cocotron-objc) :super_class
+                         #-(or apple-objc-2.0 cocotron-objc) :class
+                         #+(or apple-objc-2.0 cocotron-objc) (#_class_getSuperclass class)
+                         #-(or apple-objc-2.0 cocotron-objc) (pref class :objc_class.super_class))))
+    (unwind-protect
+         (with-ns-exceptions-as-errors
+             (apply function s selector args))
+      (free s))))
 
 
 (defun %call-next-objc-class-method (self class selector sig &rest args)
-  (rlet ((s :objc_super #+(or apple-objc cocotron-objc) :receiver #+gnu-objc :self self
-            #+(or apple-objc-2.0 cocotron-objc) :super_class #-(or apple-objc-2.0 cocotron-objc) :class
-            #+(or apple-objc-2.0 cocotron-objc) (#_class_getSuperclass (#_object_getClass class))
-            #-(or apple-objc-2.0 cocotron-objc) (pref (pref class #+apple-objc :objc_class.isa #+gnu-objc :objc_class.class_pointer) :objc_class.super_class)))
-    (let* ((siginfo (objc-method-signature-info sig))
-           (function (or (objc-method-signature-info-super-function siginfo)
-                         (setf (objc-method-signature-info-super-function siginfo)
-                               (%compile-send-function-for-signature sig t)))))
-      (with-ns-exceptions-as-errors
-          (apply function s selector args)))))
+  (declare (dynamic-extent args))
+  (let* ((siginfo (objc-method-signature-info sig))
+         (function (or (objc-method-signature-info-super-function siginfo)
+                       (setf (objc-method-signature-info-super-function siginfo)
+                             (%compile-send-function-for-signature sig t))))
+         (s (make-record :objc_super
+                         #+(or apple-objc cocotron-objc) :receiver #+gnu-objc :self self
+                         #+(or apple-objc-2.0 cocotron-objc) :super_class
+                         #-(or apple-objc-2.0 cocotron-objc) :class
+                         #+(or apple-objc-2.0 cocotron-objc)
+                         (#_class_getSuperclass (#_object_getClass class))
+                         #-(or apple-objc-2.0 cocotron-objc)
+                         (pref (pref class #+apple-objc :objc_class.isa
+                                            #+gnu-objc :objc_class.class_pointer)
+                               :objc_class.super_class))))
+    (unwind-protect
+         (with-ns-exceptions-as-errors
+             (apply function s selector args))
+      (free s))))
 
 (defun postprocess-objc-message-info (message-info)
   (let* ((objc-name (objc-message-info-message-name message-info))
