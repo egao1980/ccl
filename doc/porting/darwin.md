@@ -155,15 +155,19 @@ loop (mdbergmann on #11).
 | **Purify + native image** (xrme brainstorm) | Image code as Mach-O/ELF RX; `MAP_JIT` only for redefs | Save/merge story for dead code vectors |
 | **Entitlements** (`allow-jit` / `allow-unsigned-executable-memory`) | Needed for hardened/signing; unsigned ad-hoc kernels often already get `MAP_JIT` | Do **not** restore true RWX on Apple Silicon; `disable-executable-page-protection` ≡ unsigned-exec there |
 
-**Current:** production save is `:purify t` (pure RX at canonical VA);
-runtime compile uses **MAP_JIT** + WP.  Eager dual-map is **on**
-(`DARWIN_ARM64_DUAL_MAP=1`): NX handler redirects to `VA+HEAP_EXEC_BIAS`
-without remapping (remap-in-handler livelocked purified `#_` compiles).
-On-demand aliases (`=0`) remain available with a retry cap.  Smokes use
-`tools/with-timeout` / `tools/run-darwin-smoke.sh` (exit 124 on timeout).
+**Current (2026-08-09):** production default is `DARWIN_ARM64_DUAL_MAP=0`
+with `:purify t` (pure RX at canonical VA) + MAP_JIT for *runtime*
+compile only.  Eager dual-map (`DUAL_MAP=1`) remains a **cold-load-only**
+kernel flip for impure `arm64-boot.image` (then rebuild DM=0).  That
+two-phase kernel build is scaffolding — retire it once impure heap code
+no longer needs RX aliases.  Smokes: `tools/with-timeout` /
+`tools/run-darwin-smoke.sh` (exit 124 on timeout).
 
-**Boot path (already):** map heap RW → fill → `mprotect` RX (page-aligned).
-**Runtime compile:** needs one of the rows above before FASL redefine works.
+**Boot path (already):** map heap RW → fill → purify / `mprotect` RX.
+**Runtime compile:** MAP_JIT code-vector arena exists as an AREA_CODE
+stand-in (`level-0/ARM64/arm64-utils.lisp`); do **not** put rebuild-host
+fasls there (WP-from-MAP_JIT-lisp aborts).  Long-term: real AREA_CODE /
+code-vector separation (Clozure/ccl#11), not more dual-map toggles.
 
 Modern Apple docs push `pthread_jit_write_with_callback_np` + allowlist
 (`jit-write-allowlist`); optional later hardening once a code area exists.

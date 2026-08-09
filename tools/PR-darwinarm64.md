@@ -55,7 +55,11 @@ Companion ccl-tests: https://github.com/egao1980/ccl-tests/pull/1
 
 ## Test plan
 - [x] Surgical open-issue / throwing smokes on tip source
-- [ ] `./tools/rebuild-darwinarm64-unbiased.sh` → `DARWIN-ARM64-UNBIASED-REBUILD-OK`
-- [ ] Bare `(require "OBJC-SUPPORT")` — no Undefined `%THROW` warnings
+- [x] `./tools/rebuild-darwinarm64-unbiased.sh` → `DARWIN-ARM64-UNBIASED-REBUILD-OK`
+      (script path; **not** the merge bar — merge bar is stock rebuild-ccl)
+- [ ] Bare `(require "OBJC-SUPPORT")` on clean image — no Undefined `%THROW`
 - [ ] Optional: ANSI + CCL tests on purified tip image
-- [ ] Native `(rebuild-ccl :full t)` end-to-end (no Rosetta)
+- [ ] Native `(rebuild-ccl :full t)` end-to-end **without** Darwin-only
+      host faslop/DUAL_MAP special cases (current: works with scaffolding;
+      see `doc/porting/darwin.md` W^X section — stop iterating MAP_JIT
+      host toggles; next work is AREA_CODE / retire dual-map)
