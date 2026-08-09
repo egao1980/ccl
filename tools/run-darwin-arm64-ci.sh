@@ -12,14 +12,8 @@ echo ";; darwinarm64 CI smokes (timeout=${TIMEOUT}s)"
 "$SMOKE" "$TIMEOUT" tools/darwin-math-smoke.lisp
 "$SMOKE" "$TIMEOUT" tools/darwin-purify-smoke.lisp
 "$SMOKE" "$TIMEOUT" tools/darwin-cocoa-smoke.lisp
-"$SMOKE" "$TIMEOUT" tools/darwin-interp-ff-call-smoke.lisp || {
-  echo ";; interp ff-call smoke failed (optional until %ff-call lands in image)" >&2
-  exit 1
-}
-
-# objc-bridge is optional until green
-if [ "${CCL_CI_OBJC_BRIDGE:-}" = "1" ]; then
-  "$SMOKE" "$TIMEOUT" tools/darwin-objc-bridge-smoke.lisp
-fi
+"$SMOKE" "$TIMEOUT" tools/darwin-interp-ff-call-smoke.lisp
+"$SMOKE" "$TIMEOUT" tools/darwin-clean-build-smoke.lisp
+"$SMOKE" "${CCL_COCOA_REQUIRE_TIMEOUT:-300}" tools/darwin-require-cocoa-smoke.lisp
 
 echo "DARWIN-ARM64-CI-OK"

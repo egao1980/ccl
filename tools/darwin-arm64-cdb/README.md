@@ -59,6 +59,21 @@ cd $CCL
 ```
 
 Smoke: `tools/darwin-cocoa-smoke.lisp` (~600+ classes / ~10k+ methods).
+Full IDE: `tools/darwin-require-cocoa-smoke.lisp` (after shims below).
+
+### Cocoa constant shims
+
+`cocoa-populate.sh` installs `objc-bool-constants.ffi` (and related
+`zzz-*.ffi`).  After parse, or surgically on an existing tree:
+
+```sh
+./darm64cl --no-init --batch \
+  < tools/darwin-arm64-cdb/inject-objc-bool-constants.lisp
+```
+
+Adds: `YES`/`NO`, deprecated `NS*KeyMask` → `NSEventModifierFlag*`
+values, and `FLT_MAX`/`FLT_MIN`/`DBL_MAX` (modern SDK leaves these as
+unlinkable statics / macros).
 
 ## gl / carbon / quartz / quartzcore
 

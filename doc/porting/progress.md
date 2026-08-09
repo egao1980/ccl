@@ -14,7 +14,8 @@ Verified on this tree:
 |-------|--------|
 | `(rebuild-ccl :full t)` twice (second without LAP preload) | OK — self-hosting |
 | `tools/darwin-clean-build-smoke.lisp` | OK |
-| Cocoa / ObjC (`require :cocoa`, `ns:ns-make-rect`) | OK |
+| Cocoa CDB / ObjC bridge (`tools/darwin-cocoa-smoke.lisp`, clean-build ObjC) | OK |
+| `(require :cocoa)` / Hemlock (`tools/darwin-require-cocoa-smoke.lisp`) | OK — needs cocoa CDB shims (YES/NO, NS*KeyMask, FLT_MAX) |
 | Math / FFI smokes (`tools/darwin-math-smoke.lisp`, `tools/darwin-interp-ff-call-smoke.lisp`) | OK |
 | `ccl-tests` Rove suite | 244/244 |
 | `test-ccl-and-suites` ANSI+CCL | 21920/21920 (~39s) |
