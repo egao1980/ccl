@@ -10,8 +10,6 @@
   Done = stock `(rebuild-ccl :full t)` + bare require, no surgical reload.
 * Dual-map / `HEAP_EXEC_BIAS` = cold-load scaffolding only; retire toward
   purify + AREA_CODE (Clozure/ccl#11 / SBCL-style protocol, not source copy).
-* Sync with xrme’s pending darwinarm64 kernel before another kernel rewrite.
-
 ## August 2026 — unbiased + DUAL_MAP=0
 
 * `darwinarm64-heap-exec-bias-p` stays `nil` (vinsns no longer overrides backend).
