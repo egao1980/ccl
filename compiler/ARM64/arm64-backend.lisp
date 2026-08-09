@@ -234,6 +234,23 @@
                 :target-foreign-type-data nil
                 :target-arch arm64::*arm64-target-arch*))
 
+;;; Darwin cannot MAP_FIXED the linux/x8664 static page (#x12000); static
+;;; space lives at #x200000000 (platform-darwinarm64.h).  nil = static+4K+tag.
+;;; Must NOT share *arm64-target-arch* with linux — native xload otherwise
+;;; embeds #x1300b and cold-load faults in %FIND-PKG (read @ #x13010).
+(defconstant +darwinarm64-nil-value+ #x20000100b)
+
+(defvar *darwinarm64-target-arch* nil)
+
+(defun ensure-darwinarm64-target-arch ()
+  "Fresh arch copy with Darwin nil-value; install on *darwinarm64-backend*."
+  (let ((a (copy-structure arm64::*arm64-target-arch*)))
+    (setf (arch::target-nil-value a) +darwinarm64-nil-value+)
+    (setq *darwinarm64-target-arch* a)
+    (when (and (boundp '*darwinarm64-backend*) *darwinarm64-backend*)
+      (setf (backend-target-arch *darwinarm64-backend*) a))
+    a))
+
 #+(or darwinarm64-target (not arm64-target))
 (defvar *darwinarm64-backend*
   (make-backend :lookup-opcode #'false
@@ -256,7 +273,8 @@
                 :name :darwinarm64
                 :target-arch-name :arm64
                 :target-foreign-type-data nil
-                :target-arch arm64::*arm64-target-arch*))
+                :target-arch (or *darwinarm64-target-arch*
+                                 (ensure-darwinarm64-target-arch))))
 
 #+(or linuxarm64-target (not arm64-target))
 (pushnew *linuxarm64-backend* *known-arm64-backends*)
@@ -266,13 +284,22 @@
 
 (defvar *arm64-backend* (car *known-arm64-backends*))
 
+;;; Vinsn predicate: Darwin/arm64 RX dual-map bias.  Production builds
+;;; run purified / MAP_JIT code at the canonical VA (no HEAP_EXEC_BIAS).
+(defun darwinarm64-heap-exec-bias-p ()
+  nil)
+
 (defun fixup-arm64-backend ()
   (dolist (b *known-arm64-backends*)
     (setf (backend-lap-opcodes b) #()
           (backend-p2-dispatch b) *arm642-specials*
           (backend-p2-vinsn-templates b)  *arm64-vinsn-templates*)
     (or (backend-lap-macros b) (setf (backend-lap-macros b)
-                                     (make-hash-table :test #'equalp)))))
+                                     (make-hash-table :test #'equalp))))
+  ;; Keep Darwin nil-value correct even after arm64-arch reload resets
+  ;; the shared linux-shaped *arm64-target-arch*.
+  #+(or darwinarm64-target (not arm64-target))
+  (ensure-darwinarm64-target-arch))
 
 (fixup-arm64-backend)
 
@@ -431,8 +458,77 @@
                               &key
                                 (arg-coerce #'null-coerce-foreign-arg)
                                 (result-coerce #'null-coerce-foreign-result))
-  (declare (ignore callform args arg-coerce result-coerce)))
+  "Shared AAPCS64 ff-call expander (Linux + Darwin).
+Darwin variadic-on-stack is enforced in aapcs64-ff-call when a
+:variadic sentinel (from %external-call-expander at the CDB
+:void boundary) appears in the arg list.
 
+Records of <=128 bits become N :unsigned-doubleword
+%%get-unsigned-longlong loads (same shape as CCL x8664 integer-in-GPR
+records).  That path uses the proven getu64/set-c-arg codegen;
+passing a bare macptr as an N-word argspec was a heisenbug on Darwin
+arm64 (stable-wrong return across a process, flaky across ASLR)."
+  (let* ((result-type-spec (or (car (last args)) :void))
+         (structure-arg-temp nil))
+    (multiple-value-bind (result-type error)
+        (ignore-errors (parse-foreign-type result-type-spec))
+      (if error
+        (setq result-type-spec :void result-type *void-foreign-type*)
+        (setq args (butlast args)))
+      (collect ((argforms))
+        (when (eq (car args) :monitor-exception-ports)
+          (argforms (pop args)))
+        (when (typep result-type 'foreign-record-type)
+          (setq result-type *void-foreign-type*
+                result-type-spec :void)
+          (argforms :address)
+          (argforms (pop args)))
+        (unless (evenp (length args))
+          (error "~s should be an even-length list of alternating foreign types and values" args))
+        (do* ((args args (cddr args)))
+             ((null args))
+          (let* ((arg-type-spec (car args))
+                 (arg-value-form (cadr args)))
+            (if (or (member arg-type-spec *foreign-representation-type-keywords*
+                            :test #'eq)
+                    (typep arg-type-spec 'unsigned-byte))
+              (progn
+                (argforms arg-type-spec)
+                (argforms arg-value-form))
+              (let* ((ftype (parse-foreign-type arg-type-spec)))
+                (if (typep ftype 'foreign-record-type)
+                  (let* ((bits (ensure-foreign-type-bits ftype)))
+                    (cond ((<= bits 64)
+                           (argforms :unsigned-doubleword)
+                           (argforms `(%%get-unsigned-longlong ,arg-value-form 0)))
+                          ((<= bits 128)
+                           ;; Integer-ish record in GPRs (e.g. NSRange).
+                           ;; Bind once so multi-word loads share the same macptr.
+                           (unless structure-arg-temp
+                             (setq structure-arg-temp (gensym)))
+                           (let* ((nwords (ceiling bits 64))
+                                  (valform `(%setf-macptr ,structure-arg-temp
+                                                          ,arg-value-form)))
+                             (dotimes (i nwords)
+                               (argforms :unsigned-doubleword)
+                               (argforms `(%%get-unsigned-longlong ,valform
+                                            ,(* i 8)))
+                               (setq valform structure-arg-temp))))
+                          (t
+                           (argforms :address)
+                           (argforms arg-value-form))))
+                  (progn
+                    (argforms (foreign-type-to-representation-type ftype))
+                    (argforms (funcall arg-coerce arg-type-spec arg-value-form))))))))
+        (argforms (foreign-type-to-representation-type result-type))
+        (let ((call (funcall result-coerce result-type-spec
+                             `(,@callform ,@(argforms)))))
+          (if structure-arg-temp
+            `(let* ((,structure-arg-temp (%null-ptr)))
+               (declare (dynamic-extent ,structure-arg-temp)
+                        (type macptr ,structure-arg-temp))
+               ,call)
+            call))))))
 ;;; A resident (native) arm64 compiler is DEMAND-LOADED module by module,
 ;;; not dumped into the image the way the ppc/x86 ones are, so nothing pulls
 ;;; NXENV before nx1 needs it and the first (defun ...) dies on an undefined

@@ -1250,7 +1250,9 @@
            (= ,fulltag arm64::fulltag-symbol)
            (= ,typecode arm64::subtag-instance)))))
 
-;;; xxx --- these references will need to be relative to rnil
+;;; xxx --- prefer rnil-relative (ref-global) long-term.  Absolute form
+;;; must use the *target* nil-value (Darwin: #x20000100b after
+;;; tools/xdarwinarm64.lisp patches the arch).
 (defarm64archmacro ccl::%get-kernel-global (name)
   `(ccl::%fixnum-ref 0 (+ ,(ccl::target-nil-value)
                         ,(%kernel-global

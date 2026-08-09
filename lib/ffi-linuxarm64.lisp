@@ -123,66 +123,9 @@
 ;;; is only entered for > 128-bit return values (consistent).
 
 (defun arm64-linux::expand-ff-call (callform args &key (arg-coerce #'null-coerce-foreign-arg) (result-coerce #'null-coerce-foreign-result))
-  (let* ((result-type-spec (or (car (last args)) :void)))
-    (multiple-value-bind (result-type error)
-        (ignore-errors (parse-foreign-type result-type-spec))
-      (if error
-        (setq result-type-spec :void result-type *void-foreign-type*)
-        (setq args (butlast args)))
-      (collect ((argforms))
-        (when (eq (car args) :monitor-exception-ports)
-          (argforms (pop args)))
-        (when (typep result-type 'foreign-record-type)
-          ;;; Reached only for > 128-bit returns (per AAPCS64 §6.9, gated
-          ;;; by arm64-linux::record-type-returns-structure-as-first-arg).
-          ;;; Caller-allocated result buffer is passed as the first :address
-          ;;; arg; AAPCS64 wiring puts it in X8 at the call boundary.
-          (setq result-type *void-foreign-type*
-                result-type-spec :void)
-          (argforms :address)
-          (argforms (pop args)))
-        (unless (evenp (length args))
-          (error "~s should be an even-length list of alternating foreign types and values" args))
-        (do* ((args args (cddr args)))
-             ((null args))
-          (let* ((arg-type-spec (car args))
-                 (arg-value-form (cadr args)))
-            (if (or (member arg-type-spec *foreign-representation-type-keywords*
-                            :test #'eq)
-                    (typep arg-type-spec 'unsigned-byte))
-              (progn
-                (argforms arg-type-spec)
-                (argforms arg-value-form))
-              (let* ((ftype (parse-foreign-type arg-type-spec)))
-                (if (typep ftype 'foreign-record-type)
-                  (let* ((bits (ensure-foreign-type-bits ftype)))
-                    (cond
-                      ;;; ARM64-DEVIATION: <=64 bit struct passed
-                      ;;; left-justified (raw value, no ash).  PPC64
-                      ;;; source right-justified via (ash _ (- bits 64)).
-                      ((<= bits 64)
-                       (argforms :unsigned-doubleword)
-                       (argforms `(%%get-unsigned-longlong ,arg-value-form 0)))
-                      ;;; ARM64-DEVIATION: 65-128 bit struct passed as
-                      ;;; 2 doublewords in GPRs (X<n>..X<n+1>).  Matches
-                      ;;; the PPC64 source for the same size range but
-                      ;;; only applies up to 128 bits on AAPCS64.
-                      ((<= bits 128)
-                       (argforms (ceiling bits 64))
-                       (argforms arg-value-form))
-                      ;;; ARM64-DEVIATION: > 128 bit struct passed by
-                      ;;; reference (caller allocates copy, callee reads
-                      ;;; through pointer).  PPC64 source would emit
-                      ;;; (ceiling bits 64) doublewords here — AAPCS64
-                      ;;; never does that.
-                      (t
-                       (argforms :address)
-                       (argforms arg-value-form))))
-                  (progn
-                    (argforms (foreign-type-to-representation-type ftype))
-                    (argforms (funcall arg-coerce arg-type-spec arg-value-form))))))))
-        (argforms (foreign-type-to-representation-type result-type))
-        (funcall result-coerce result-type-spec `(,@callform ,@(argforms)))))))
+  (arm64::expand-ff-call callform args
+                         :arg-coerce arg-coerce
+                         :result-coerce result-coerce))
 
 
 ;;;-----------------------------------------------------------------------

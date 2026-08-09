@@ -273,6 +273,20 @@
   (stur imm0 (:@ ptr (:$ arm64::macptr.address))) ; ppc:67 (str -> stur)
   (ret))                                ; ppc:68
 
+;;; %set-kernel-global-ptr-from-offset — store a macptr's address into a
+;;; kernel global (rnil-relative).  Needed because Lisp
+;;; `(setf (%get-ptr (+ (target-nil-value) off)))` is wrong on
+;;; darwinarm64 (target-nil-value is the canonical low nil, not the
+;;; relocated STATIC_BASE address; bias is still 0).
+(defarm64lapfunction %set-kernel-global-ptr-from-offset ((offset arg_y)
+                                                         (ptr arg_z))
+  (check-nargs 2)
+  (unbox-fixnum imm0 offset)
+  (add imm0 imm0 rnil)
+  (ldur imm1 (:@ ptr (:$ arm64::macptr.address)))
+  (str imm1 (:@ imm0 (:$ 0)))
+  (ret))
+
 ;;; =====================================================================
 ;;; %current-frame-ptr / %current-vsp — ppc:197/202
 ;;; =====================================================================
@@ -548,7 +562,7 @@
   (ldp fn lr (:@ sp (:$ 16)))           ; ppc:1160 (mtlr loc-pc)
   (add sp sp (:$ 32))                   ;   discard frame; vsp NOT reloaded
   (ldur imm0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:1161 codevector
-  (br imm0))                            ; ppc:1162-1163 (mtctr/bctr) — W4-D15
+  (br-codevector imm0))                            ; ppc:1162-1163 (mtctr/bctr) — W4-D15
 
 (defarm64lapfunction %apply-with-method-context ((magic arg_x)
                                                  (function arg_y)
@@ -562,7 +576,7 @@
   (ldp fn lr (:@ sp (:$ 16)))           ; ppc:1180
   (add sp sp (:$ 32))
   (ldur imm0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:1181
-  (br imm0))                            ; ppc:1182-1183 — W4-D15
+  (br-codevector imm0))                            ; ppc:1182-1183 — W4-D15
 
 ;;; %apply-lexpr-tail-wise — ppc:1188
 ;;; Preconditions ppc:1189-1199 apply verbatim (lexpr via .SPlexpr-entry;
@@ -602,7 +616,7 @@
   (b.eq @jump)                          ; ppc:1222 (beqctr cr1)
   (vpop arg_x)                          ; ppc:1223
   @jump
-  (br temp0))                           ; ppc:1224 (bctr) — W4-D15
+  (br-codevector temp0))                ; ppc:1224 (bctr) — W4-D15
 
 
 ;;; ---------------------------------------------------------------------
@@ -669,3 +683,227 @@
   ;; SAME correction arm64-misc.lisp:457-460 records for the VALUES draft in
   ;; 16m37; the drafts systematically spell tail subprim jumps as calls.
   (jump-subprim .SPfuncall))           ; ppc:1275 (ba .SPfuncall) — TAIL
+
+
+;;; =====================================================================
+;;; Interpreted %ff-call (AAPCS64) — REPL / uncompiled #_ path
+;;; =====================================================================
+;;; Compiled ff-call uses aapcs64-ff-call + .SPffcall (alloc-c-frame; the
+;;; compiler resets *arm642-cstack* after SPffcall pops the frame — no
+;;; discard-c-frame undo).
+;;;
+;;; Do NOT use with-variable-c-frame here: its discard-c-frame undo races
+;;; with _SPffcall's SP restore and breaks nested callers (call-check-regs
+;;; / cheap-eval / any extra lisp frame).  Mirror %make-code-executable:
+;;; save-lisp-context, build the c_frame, .SPffcall, restore-full-lisp-context.
+;;;
+;;; ARGBUF layout: fixnum nwords at offset 0, then nwords param words
+;;; (GPR0-7 + overflow) at offset 8.  FP regs from the 64-byte FP-ARGS
+;;; block.  RESULT receives imm0@0 / d0@8.
+
+(defarm64lapfunction %do-ff-call ((result 0) (argbuf arg_x) (fp-regs arg_y) (entry arg_z))
+  (check-nargs 4)
+  (ldr temp0 (:@ vsp (:$ 0)))           ; result macptr
+  (add vsp vsp (:$ 8))
+  (save-lisp-context)
+  (vpush temp0)                         ; result
+  (vpush argbuf)
+  (vpush fp-regs)
+  (vpush entry)
+  ;; vsp: [result][argbuf][fp-regs][entry]
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))          ; nwords (fixnum)
+  (add imm2 temp1 (:$ '6))
+  (add imm2 imm2 (:$ (1- arm64::dnode-size)))
+  (and imm2 imm2 (:$ (- arm64::dnode-size)))
+  (sub imm0 imm2 (:$ '1))
+  (lsl imm0 imm0 (:$ (- arm64::num-subtag-bits arm64::fixnumshift)))
+  (add imm0 imm0 (:$ arm64::subtag-u64-vector))
+  (mov imm1 sp)
+  (sub sp sp imm2)
+  (stp imm0 imm1 (:@ sp (:$ 0)))
+  ;; Copy nwords params from argbuf+8 into c_frame.params.
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 sp (:$ arm64::c-frame.param0))
+  @copy
+  (cbz temp1 @copydone)
+  (ldr temp0 (:@ imm0 (:$ 0)))
+  (str temp0 (:@ imm1 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 imm1 (:$ 8))
+  (sub temp1 temp1 (:$ '1))
+  (b @copy)
+  @copydone
+  (ldr fp-regs (:@ vsp (:$ 8)))
+  (ldr entry (:@ vsp (:$ 0)))
+  (macptr-ptr imm0 fp-regs)
+  (ldr d0 (:@ imm0 (:$ 0)))
+  (ldr d1 (:@ imm0 (:$ 8)))
+  (ldr d2 (:@ imm0 (:$ 16)))
+  (ldr d3 (:@ imm0 (:$ 24)))
+  (ldr d4 (:@ imm0 (:$ 32)))
+  (ldr d5 (:@ imm0 (:$ 40)))
+  (ldr d6 (:@ imm0 (:$ 48)))
+  (ldr d7 (:@ imm0 (:$ 56)))
+  (call-subprim .SPffcall)
+  (ldr temp0 (:@ vsp (:$ 24)))          ; result
+  (macptr-ptr imm1 temp0)
+  (str imm0 (:@ imm1 (:$ 0)))
+  (str d0 (:@ imm1 (:$ 8)))
+  (mov arg_z rnil)
+  (restore-full-lisp-context)
+  (ret))
+
+(defun %ff-call (entry &rest specs-and-vals)
+  (declare (dynamic-extent specs-and-vals))
+  (let* ((len (length specs-and-vals))
+         (overflow-words 0))
+    (declare (fixnum len overflow-words))
+    (let* ((result-spec (or (car (last specs-and-vals)) :void))
+           (nargs (ash (the fixnum (1- len)) -1))
+           (n-fp-args 0)
+           (n-gpr-args 0))
+      (declare (fixnum nargs n-fp-args n-gpr-args))
+      (ecase result-spec
+        ((:address :unsigned-doubleword :signed-doubleword
+                   :single-float :double-float
+                   :signed-fullword :unsigned-fullword
+                   :signed-halfword :unsigned-halfword
+                   :signed-byte :unsigned-byte
+                   :void)
+         (do* ((i 0 (1+ i))
+               (specs specs-and-vals (cddr specs))
+               (spec (car specs) (car specs)))
+              ((= i nargs))
+           (declare (fixnum i))
+           (case spec
+             ((:address :unsigned-doubleword :signed-doubleword
+                        :signed-fullword :unsigned-fullword
+                        :signed-halfword :unsigned-halfword
+                        :signed-byte :unsigned-byte)
+              (incf n-gpr-args)
+              (when (> n-gpr-args 8)
+                (incf overflow-words)))
+             ((:single-float :double-float)
+              (incf n-fp-args)
+              (when (> n-fp-args 8)
+                (incf overflow-words)))
+             (:registers)
+             (:variadic)
+             (t (if (typep spec 'unsigned-byte)
+                  ;; N-word struct: each word is a GPR (then overflow).
+                  (dotimes (k (the fixnum spec))
+                    (declare (ignore k))
+                    (incf n-gpr-args)
+                    (when (> n-gpr-args 8)
+                      (incf overflow-words)))
+                  (error "unknown arg spec ~s" spec)))))
+         (let ((total-words (+ 8 overflow-words)))
+           (declare (fixnum total-words))
+           (%stack-block ((fp-args (* 8 8))
+                          (result-buf 16)
+                          (argbuf (* 8 (1+ total-words))))
+             (dotimes (i 64) (setf (%get-unsigned-byte fp-args i) 0))
+             (dotimes (i (* 8 (1+ total-words)))
+               (setf (%get-unsigned-byte argbuf i) 0))
+             ;; Word 0 = fixnum nwords; params at offset 8.
+             (%set-object argbuf 0 total-words)
+             (let* ((gpr-offset 8)
+                    (other-offset (+ 8 (* 8 8))))
+               (declare (fixnum gpr-offset other-offset))
+               (setq n-fp-args 0 n-gpr-args 0)
+               (do* ((i 0 (1+ i))
+                     (specs specs-and-vals (cddr specs))
+                     (spec (car specs) (car specs))
+                     (val (cadr specs) (cadr specs)))
+                    ((= i nargs))
+                 (declare (fixnum i))
+                 (case spec
+                   (:variadic)
+                   (:address
+                    (incf n-gpr-args)
+                    (cond ((<= n-gpr-args 8)
+                           (setf (%get-ptr argbuf gpr-offset) val)
+                           (incf gpr-offset 8))
+                          (t
+                           (setf (%get-ptr argbuf other-offset) val)
+                           (incf other-offset 8))))
+                   ((:signed-doubleword :signed-fullword :signed-halfword
+                                        :signed-byte)
+                    (incf n-gpr-args)
+                    (cond ((<= n-gpr-args 8)
+                           (setf (%%get-signed-longlong argbuf gpr-offset) val)
+                           (incf gpr-offset 8))
+                          (t
+                           (setf (%%get-signed-longlong argbuf other-offset) val)
+                           (incf other-offset 8))))
+                   ((:unsigned-doubleword :unsigned-fullword :unsigned-halfword
+                                          :unsigned-byte)
+                    (incf n-gpr-args)
+                    (cond ((<= n-gpr-args 8)
+                           (setf (%%get-unsigned-longlong argbuf gpr-offset) val)
+                           (incf gpr-offset 8))
+                          (t
+                           (setf (%%get-unsigned-longlong argbuf other-offset) val)
+                           (incf other-offset 8))))
+                   (:double-float
+                    (cond ((< n-fp-args 8)
+                           (setf (%get-double-float fp-args (* n-fp-args 8)) val)
+                           (incf n-fp-args))
+                          (t
+                           (setf (%get-double-float argbuf other-offset) val)
+                           (incf other-offset 8)
+                           (incf n-fp-args))))
+                   (:single-float
+                    (cond ((< n-fp-args 8)
+                           (setf (%get-single-float fp-args (* n-fp-args 8)) val)
+                           (incf n-fp-args))
+                          (t
+                           (setf (%get-single-float argbuf other-offset) val)
+                           (incf other-offset 8)
+                           (incf n-fp-args))))
+                   (:registers)
+                   (t
+                    ;; N-word struct from macptr: consecutive GPR words.
+                    (let* ((p 0))
+                      (declare (fixnum p))
+                      (dotimes (k (the fixnum spec))
+                        (declare (ignore k))
+                        (incf n-gpr-args)
+                        (cond ((<= n-gpr-args 8)
+                               (setf (%get-ptr argbuf gpr-offset)
+                                     (%get-ptr val p))
+                               (incf gpr-offset 8))
+                              (t
+                               (setf (%get-ptr argbuf other-offset)
+                                     (%get-ptr val p))
+                               (incf other-offset 8)))
+                        (incf p 8))))))
+               (%do-ff-call result-buf argbuf fp-args entry)
+               (ecase result-spec
+                 (:void nil)
+                 (:address (%get-ptr result-buf 0))
+                 (:unsigned-byte (%get-unsigned-byte result-buf 0))
+                 (:signed-byte (%get-signed-byte result-buf 0))
+                 (:unsigned-halfword (%get-unsigned-word result-buf 0))
+                 (:signed-halfword (%get-signed-word result-buf 0))
+                 (:unsigned-fullword (%get-unsigned-long result-buf 0))
+                 (:signed-fullword (%get-signed-long result-buf 0))
+                 (:unsigned-doubleword (%get-natural result-buf 0))
+                 (:signed-doubleword (%get-signed-natural result-buf 0))
+                 (:single-float (%get-single-float result-buf 8))
+                 (:double-float (%get-double-float result-buf 8)))))))))))
+
+;;; %throw — Lisp-callable wrapper around .SPthrow (x8664 twin in
+;;; level-0/X86/x86-def.lisp).  Caller: (apply #'%throw tag values…).
+;;; nargs on entry counts tag+values; SPthrow wants nargs = nvalues with
+;;; tag at (vsp+nargs).  Missing-tag errors are handled inside .SPthrow.
+(defarm64lapfunction %throw ()
+  (:arglist (&rest args))
+  (vpush-argregs)
+  (sub nargs nargs (:$ '1))
+  (jump-subprim .SPthrow))

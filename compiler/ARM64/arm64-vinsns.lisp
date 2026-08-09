@@ -300,8 +300,16 @@
 (define-arm64-vinsn (alloc-variable-c-frame) (()
                                               ((n-c-args :lisp))
                                               ((header (:u64 #.arm64::imm0))
-                                               (size :u64)
-                                               (prevsp (:imm #.arm64::imm1))))
+                                               (size (:u64 #.arm64::imm2))
+                                               ;; prevsp must be imm1 for
+                                               ;; pc_luser_xp stp recognition.
+                                               ;; size must not alias imm1
+                                               ;; (mov prevsp sp would clobber
+                                               ;; it before sub sp,sp,size).
+                                               ;; Wired :imm is invalid in
+                                               ;; allocate-temporary-vreg;
+                                               ;; use :u64 for both.
+                                               (prevsp (:u64 #.arm64::imm1))))
   (add size n-c-args (:$ '6))        ;+ header + prevsp + 4-word frame
   (add size size (:$ (:apply 1- arm64::dnode-size))) ;round byte size up...
   (and size size (:$ (:apply - arm64::dnode-size)))  ; ...to a dnode boundary
@@ -799,11 +807,27 @@
 ;;; vector as `object`).  Call scratch must NEVER be an allocatable
 ;;; arg/imm/temp-with-ABI-meaning -- v2 cont-71 class; temp0 is dead at
 ;;; every call boundary (callee prologue reads only nfn).
+;;; Darwin W^X: production is purify RX + MAP_JIT at the canonical VA.
+;;; HEAP_EXEC_BIAS dual-map is retired — must stay nil here (this file
+;;; loads after arm64-backend and previously overwrote its nil with t,
+;;; baking bias into every call/jump-known-* site).
+(defun darwinarm64-heap-exec-bias-p ()
+  nil)
+
 (define-arm64-vinsn (jump-known-symbol :jumplr) (()
                                                  ()
-                                                 ((cv (:lisp #.arm64::temp0))))
+                                                 ((cv (:lisp #.arm64::temp0))
+                                                  (bias (:u64 #.arm64::imm0))
+                                                  (hi (:u64 #.arm64::imm1))))
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias)
+   :skip-bias)
   (br cv))
 
 ;;; ============ call-known-symbol ============
@@ -814,9 +838,18 @@
 ;;; (upstream-port/compiler/arm642-additions.lisp:526).
 (define-arm64-vinsn (call-known-symbol :call) (((result (:lisp #.arm64::arg_z)))
                                                ()
-                                               ((cv (:lisp #.arm64::temp0))))
+                                               ((cv (:lisp #.arm64::temp0))
+                                                (bias (:u64 #.arm64::imm0))
+                                                (hi (:u64 #.arm64::imm1))))
   (ldur nfn (:@ fname (:$ arm64::symbol.fcell)))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias)
+   :skip-bias)
   (blr cv))
 
 ;;; ============ jump-known-function / call-known-function ============
@@ -830,8 +863,17 @@
 ;;; (doc/porting/arm64.md "Functions").
 (define-arm64-vinsn (jump-known-function :jumplr) (()
                                                    ()
-                                                   ((cv (:lisp #.arm64::temp0))))
+                                                   ((cv (:lisp #.arm64::temp0))
+                                                    (bias (:u64 #.arm64::imm0))
+                                                    (hi (:u64 #.arm64::imm1))))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias)
+   :skip-bias)
   (br cv))
 
 ;;; NO result spec: the PPC64 donor (@3715) declares none and every emit
@@ -841,8 +883,17 @@
 ;;; (@3701) has the wired result and its sites pass arg_z.
 (define-arm64-vinsn (call-known-function :call) (()
                                                  ()
-                                                 ((cv (:lisp #.arm64::temp0))))
+                                                 ((cv (:lisp #.arm64::temp0))
+                                                  (bias (:u64 #.arm64::imm0))
+                                                  (hi (:u64 #.arm64::imm1))))
   (ldur cv (:@ nfn (:$ arm64::function.code-vector)))
+  ((:pred darwinarm64-heap-exec-bias-p)
+   (lsr hi cv (:$ 40))
+   (cmp hi (:$ #x30))
+   (b.ne :skip-bias)
+   (movz bias (:$ #x40 :lsl 32))
+   (add cv cv bias)
+   :skip-bias)
   (blr cv))
 
 ;;; ============ %unbox-u32 ============
@@ -6122,13 +6173,16 @@
 ;;; PPC64 LINE-PORT (ppc64-vinsns.lisp:3398): (mr dest ppc::sp) -- the
 ;;; control-stack pointer AS a node value (frames are 16-aligned, so
 ;;; under fixnumshift=3 the raw SP is a valid boxed fixnum, same pun as
-;;; PPC).  A64: reg 31 in an add-immediate Rn slot IS SP (the alias of
-;;; `mov Xd, SP`); bare `sp` is this lane's gate-proven operand spelling
-;;; for it (w4:443 / w10:558 build-lisp-frame bases).  May DUPLICATE a
-;;; definition in Matt's arm64-vinsns.lisp (unverifiable locally) --
-;;; by-name redefinition is benign; drop this one if his tree has it.
-(define-arm64-vinsn %current-frame-ptr (((dest :imm))
+;;; PPC).  Dest must be :lisp (not :imm) — ALLOCATE-TEMPORARY-VREG on
+;;; arm64 rejects :imm as a result mode.
+(define-arm64-vinsn %current-frame-ptr (((dest :lisp))
                                         ())
+  (add dest sp (:$ 0)))
+
+;;; ARM64 C frames live on the Lisp SP (alloc-c-frame), unlike x86's
+;;; separate tcr.foreign-sp.  %foreign-stack-pointer is therefore SP.
+(define-arm64-vinsn %foreign-stack-pointer (((dest :lisp))
+                                            ())
   (add dest sp (:$ 0)))
 
 ;;; mem-ref-c-address / mem-ref-address -- demanded by the
@@ -6512,6 +6566,40 @@
                                        (argnum :u16const)))
   (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0
                                  (:apply ash argnum 3))))))
+
+;;; Darwin non-variadic stack overflow: natural-size packing (Apple ABI).
+;;; byte-off is a byte index from param0 (0 = first GPR save word).
+;;; Integer temps are :u64 like set-c-arg; strb/strh/W-str take the low bits.
+;;; Callers must pass a naturally aligned offset for the store width.
+(define-arm64-vinsn set-c-arg-byte (()
+                                    ((argval :u64)
+                                     (byte-off :u16const)))
+  (strb (:w argval) (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-c-arg-halfword (()
+                                        ((argval :u64)
+                                         (byte-off :u16const)))
+  (strh (:w argval) (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-c-arg-fullword (()
+                                        ((argval :u64)
+                                         (byte-off :u16const)))
+  (str (:w argval) (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-c-arg-doubleword-bytes (()
+                                                ((argval :u64)
+                                                 (byte-off :u16const)))
+  (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-single-c-arg-bytes (()
+                                            ((argval :single-float)
+                                             (byte-off :u16const)))
+  (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
+
+(define-arm64-vinsn set-double-c-arg-bytes (()
+                                            ((argval :double-float)
+                                             (byte-off :u16const)))
+  (str argval (:@ sp (:$ (:apply + arm64::c-frame.param0 byte-off)))))
 
 (define-arm64-vinsn reload-single-c-arg (((argval :single-float))
                                          ((argnum :u16const)))

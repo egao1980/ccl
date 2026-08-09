@@ -68,6 +68,13 @@
          (blr imm1))
       (error "unknown subprimitive name ~s" spname))))
 
+;;; Darwin W^X: dual-map bias retired (purify RX + MAP_JIT).  Plain br/blr.
+(defarm64lapmacro br-codevector (reg)
+  `(br ,reg))
+
+(defarm64lapmacro blr-codevector (reg)
+  `(blr ,reg))
+
 (defarm64lapmacro set-nargs (n)
   (check-type n (unsigned-byte 13))
   `(movz nargs (:$ ',n)))
