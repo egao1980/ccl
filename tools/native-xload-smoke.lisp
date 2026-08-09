@@ -12,8 +12,8 @@
 (load "ccl:compiler;ARM64;arm64-backend.lisp")
 (load "ccl:lib;misc.lisp")
 (load "ccl:lib;compile-ccl.lisp")
-;; xarm64fasload requires XFASLOAD and registers *darwinarm64-xload-backend*
-(require "XARM64FASLOAD" "ccl:xdump;xarm64fasload")
+;; Full xload toolchain (registers darwin backend + write-image-file).
+(require-modules *arm64-xload-modules*)
 (load "ccl:xdump;xfasload.lisp")
 
 (ensure-darwinarm64-target-arch)
