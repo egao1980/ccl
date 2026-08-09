@@ -4,7 +4,7 @@
 ;;;;     < tools/save-darwinarm64-image.lisp
 ;;;;
 ;;;; Production save uses :purify t — copies MAP_JIT AREA_CODE into
-;;;; AREA_READONLY (RX at canonical VA).  Dual-map is retired.
+;;;; AREA_READONLY (RX at the canonical VA).
 ;;;;
 ;;;; Clear *outstanding-deferred-warnings* before dump: saving from inside
 ;;;; with-compilation-unit (compile-ccl) otherwise leaves a parent unit in

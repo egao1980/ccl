@@ -1,7 +1,6 @@
 ;;;; Interpreted / runtime %ff-call smoke (darwinarm64).
 ;;;;
-;;;; Tests the *baked* image — no surgical reload of arm64-def.lisp.
-;;;; True interpreter coverage: FUNCALL of runtime %ff-call, plus
+;;;; Tests the baked image: FUNCALL of runtime %ff-call, plus
 ;;;; cheap-eval of #_getpid (macroexpands through ff-call).
 ;;;;
 ;;;;   ./darm64cl --no-init --batch < tools/darwin-interp-ff-call-smoke.lisp

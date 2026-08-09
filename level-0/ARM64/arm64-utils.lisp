@@ -868,7 +868,7 @@ be somewhat larger than what was specified)."
 ;;;
 ;;; All executable code (cold-load fasls + interactive compile) lives here.
 ;;; Purify copies live vectors into AREA_READONLY.  Dynamic heap is never
-;;; executable — dual-map / HEAP_EXEC_BIAS is retired.  WP toggles only in
+;;; executable.  WP toggles only in
 ;;; kernel C (darwin_arm64_jit_*); never call pthread_jit_write_protect_np
 ;;; from lisp (NX's all MAP_JIT pages for the thread).
 

@@ -85,7 +85,7 @@
 ;;; Do not redefine live helpers mid-rebuild.
 ;;;
 ;;; AREA_CODE: executable code is MAP_JIT from cold-load; purify copies
-;;; into AREA_READONLY.  Dual-map retired.  WP only in kernel C.
+;;; into AREA_READONLY.  WP only in kernel C.
 #+(and darwinarm64-target)
 (progn
   (defvar *jit-code-base* nil)

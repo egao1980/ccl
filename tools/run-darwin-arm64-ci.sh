@@ -17,11 +17,6 @@ echo ";; darwinarm64 CI smokes (timeout=${TIMEOUT}s)"
   exit 1
 }
 
-# Dual-map off gate when explicitly requested
-if [ "${DARWIN_ARM64_DUAL_MAP:-}" = "0" ] || [ "${CCL_CI_DROP_DUAL_MAP:-}" = "1" ]; then
-  DARWIN_ARM64_DUAL_MAP=0 "$CCL_DIR/tools/run-darwin-drop-dual-map.sh"
-fi
-
 # objc-bridge is optional until green
 if [ "${CCL_CI_OBJC_BRIDGE:-}" = "1" ]; then
   "$SMOKE" "$TIMEOUT" tools/darwin-objc-bridge-smoke.lisp

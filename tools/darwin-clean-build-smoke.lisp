@@ -1,7 +1,7 @@
 ;;;; Post-rebuild smoke: tip must already be baked into darm64cl.image.
-;;;; No surgical reload.  Fails if level-0 / objc tip is stale.
+;;;; Fails if level-0 / objc tip is stale.
 ;;;;
-;;;;   DUAL_MAP=0 ./darm64cl --no-init --batch < tools/darwin-clean-build-smoke.lisp
+;;;;   ./darm64cl --no-init --batch < tools/darwin-clean-build-smoke.lisp
 ;;;;   ./tools/run-darwin-smoke.sh 120 tools/darwin-clean-build-smoke.lisp
 (in-package :ccl)
 

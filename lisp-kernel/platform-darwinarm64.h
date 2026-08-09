@@ -35,7 +35,7 @@ typedef ucontext_t ExceptionInformation;
  *   * Purified / AREA_READONLY code → mprotect RX at the canonical VA
  *   * Cold-load + runtime code → MAP_JIT code heap (AREA_CODE stand-in)
  *     via darwin_arm64_set_code_heap; purify copies into AREA_READONLY.
- *   * Dynamic heap is never executable.  Dual-map / HEAP_EXEC_BIAS retired.
+ *   * Dynamic heap is never executable.
  */
 #ifndef DARWIN_ARM64_DUAL_MAP
 #define DARWIN_ARM64_DUAL_MAP 0

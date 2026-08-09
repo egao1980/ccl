@@ -123,57 +123,38 @@ same region needs RW).  Upstream direction (see Clozure/ccl#11 discussion):
 a separate code area / code-vector slot (SBCL-style), not “MAP_JIT the
 whole heap”.
 
-**Bring-up lesson:** do **not** `mprotect` the whole dynamic area RX after
-image load.  Boot code runs from pure/readonly (RX is fine there) and from
-kernel subprims; heap stores (`SPgvset`, cons init) must keep dynamic RW.
-With dynamic RX, `handle_alloc_trap` succeeds then `SPgvset` takes
+Do **not** `mprotect` the whole dynamic area RX after image load.  Boot
+code runs from pure/readonly (RX is fine there) and from kernel
+subprims; heap stores (`SPgvset`, cons init) must keep dynamic RW.  With
+dynamic RX, `handle_alloc_trap` succeeds then `SPgvset` takes
 `EXC_BAD_ACCESS` and cold-load misreports a nested “read” fault (Darwin
-`si_code` ≠ Linux `SEGV_ACCERR` — use ESR.WnR).  Runtime mutation of
-dynamic code still needs MAP_JIT / a separate code area.
+`si_code` ≠ Linux `SEGV_ACCERR` — use ESR.WnR).
 
-## Workarounds researched (2026-08)
+### Darwin arm64 executable model
 
-Sources: Clozure/ccl#11 (xrme / mdbergmann), Apple JIT porting guide + DTS,
-SBCL `darwin-jit`, Clasp; LuaJIT #1334 / `LUAJIT_ENABLE_OSX_HRT`; V8
-`code-memory-access.h`; JSC BrowserEngineKit witness APIs; CPython
-`Python/jit.c` (GH-126195); PyPy `rmmap.py` (darwin+arm64 only);
-Wasmtime MAP_JIT issues; Kyle Avery JIT notes.
-
-### W^X — do not MAP_JIT the mixed heap
-
-Apple Silicon **never** allows simultaneous W+X (Hardened Runtime or not;
-DTS: RWX is “inherently invalid”).  `pthread_jit_write_protect_np` is
-per-thread for **all** `MAP_JIT` pages: RX to run a store, RW to commit
-it — impossible if code and data share one JIT region → infinite fault
-loop (mdbergmann on #11).
-
-| Approach | Pros | Cons / notes |
-| --- | --- | --- |
-| **Separate `AREA_CODE` / code-vector** (SBCL-style) | Matches Apple + SBCL; WP only around compile/GC | Big allocator/GC change; may lose PC-relative constants (xrme). Prototype direction: `no-defun-allowed/ccl` |
-| **`mach_vm_remap` dual map** | Same phys at RW VA + RX VA; no WP toggle | mdbergmann: worked past `l1-init` in one session; fragile; two VAs for every code page |
-| **WP toggles in subprims only** | Small kernel change | Misses inline vinsn stores → incomplete |
-| **Purify + native image** (xrme brainstorm) | Image code as Mach-O/ELF RX; `MAP_JIT` only for redefs | Save/merge story for dead code vectors |
-| **Entitlements** (`allow-jit` / `allow-unsigned-executable-memory`) | Needed for hardened/signing; unsigned ad-hoc kernels often already get `MAP_JIT` | Do **not** restore true RWX on Apple Silicon; `disable-executable-page-protection` ≡ unsigned-exec there |
-
-**Current (2026-08-09):** `DARWIN_ARM64_DUAL_MAP=0` only.  `:purify t`
-copies MAP_JIT / heap code into `AREA_READONLY` (RX).  Runtime compile +
-fasl code-vectors use a MAP_JIT arena (AREA_CODE stand-in).  Dual-map /
-`HEAP_EXEC_BIAS` retired.  Smokes: `tools/with-timeout` /
-`tools/run-darwin-smoke.sh` (exit 124 on timeout).
+`:purify t` copies MAP_JIT / heap code into `AREA_READONLY` (RX).
+Dynamic heap is never executable.  Runtime compile + fasl code-vectors
+use a MAP_JIT arena (AREA_CODE stand-in).  Stock path:
+`(rebuild-ccl :full t)`.  Details: `doc/porting/progress.md`.  Smokes:
+`tools/with-timeout` / `tools/run-darwin-smoke.sh` (exit 124 on timeout).
 
 **Boot path:** map heap RW → fill → purify / `mprotect` RX on pure.
 **Runtime compile / fasl load:** MAP_JIT via `%allocate-code-vector`
 (`level-0/ARM64/arm64-utils.lisp`); WP only in kernel C
-(`darwin_arm64_jit_*`).
+(`darwin_arm64_jit_*`).  On native Darwin, `compile-file` always
+allocates MAP_JIT (eval-when `:compile-toplevel` must run while the
+heap is NX).
 
 **Dirtying `AREA_READONLY` under W^X:** stock ports `UnProtectMemory` →
 RWX so a store into pure leaves the page executable.  Darwin cannot
 RWX — `UnProtectMemory` is RW-only.  Kernel oscillates per fault:
 write → `mprotect(RW)`; later NX fetch on that page → `mprotect(RX)`.
-Do **not** treat NX in `AREA_READONLY` as “non-code heap” FATAL.
+Do **not** treat NX in `AREA_READONLY` as “non-code heap” FATAL
+(FATAL NX = execute from RW **dynamic** heap).
 
 Modern Apple docs push `pthread_jit_write_with_callback_np` + allowlist
-(`jit-write-allowlist`); optional later hardening once a code area exists.
+(`jit-write-allowlist`); optional later hardening once a first-class
+code area exists.
 
 ### UUO / SIGILL / Mach exceptions
 
@@ -204,8 +185,8 @@ port (preferred) or BSD `SIGILL` (XNU `ux_exception.c`).
   ASLR-chosen VA, stop baking absolute nil into images/xload/compiler,
   relocate C `STATIC_BASE_ADDRESS` / image headers — a large milestone,
   not a header tweak.
-* `MAP_JIT|MAP_FIXED` → EINVAL: cannot pin JIT at `IMAGE_BASE`. Floating
-  `MAP_JIT` + reloc, dual-map, or purify-into-Mach-O.
+* `MAP_JIT|MAP_FIXED` → EINVAL: cannot pin JIT at `IMAGE_BASE`.
+  Floating `MAP_JIT` + reloc.
 
 ### Interface `.cdb` databases
 

@@ -284,8 +284,7 @@
 
 (defvar *arm64-backend* (car *known-arm64-backends*))
 
-;;; Vinsn predicate: Darwin/arm64 RX dual-map bias.  Production builds
-;;; run purified / MAP_JIT code at the canonical VA (no HEAP_EXEC_BIAS).
+;;; Darwin/arm64: code runs at the canonical VA (purify RX + MAP_JIT).
 (defun darwinarm64-heap-exec-bias-p ()
   nil)
 

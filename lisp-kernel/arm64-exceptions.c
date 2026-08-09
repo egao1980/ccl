@@ -1098,8 +1098,7 @@ darwin_arm64_pc_in_code_vector(natural pcval)
     data_start = (pcval - fulltag_misc) + node_size;
     data_end = data_start + (count * 4);
     /* Reject extents that swallow the next heap object (seen: a
-       code-vector header whose count overlaps a following docstring;
-       dual-map then lets us "execute" the string as UUOs). */
+       code-vector header whose count overlaps a following docstring). */
     nest_end = data_end;
     for (p = ((pcval - fulltag_misc) + 16) & ~(natural)15;
          p + node_size < data_end;
@@ -1283,8 +1282,8 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
   }
 
 #if defined(DARWIN) && defined(ARM64)
-  /* Dual-map / HEAP_EXEC_BIAS retired: dynamic heap is never executable.
-     Executable code is MAP_JIT (darwin_arm64_code_*) or AREA_READONLY.
+  /* Dynamic heap is never executable.  Executable code is MAP_JIT
+     (darwin_arm64_code_*) or AREA_READONLY.
 
      Stock ports dirty AREA_READONLY with UnProtect→RWX (page stays
      executable).  Darwin W^X forbids RWX, so we oscillate:

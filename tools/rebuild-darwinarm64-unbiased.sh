@@ -1,5 +1,5 @@
 #!/bin/sh
-# Full Darwin/arm64 rebuild under AREA_CODE (no dual-map).
+# Full Darwin/arm64 rebuild (MAP_JIT code arena + purify RX).
 #
 # Same shape as a normal CCL platform rebuild: cross-xload boot image,
 # single kernel, cold-load + save-application :purify t, smokes.
@@ -79,7 +79,7 @@ log ";; [1/3] cross-bootstrap arm64-boot.image"
   || fail "bootstrap failed (see $LOG)"
 test -f arm64-boot.image || fail "bootstrap did not write arm64-boot.image"
 
-log ";; [2/3] kernel + cold-load/purify (AREA_CODE, no dual-map)"
+log ";; [2/3] kernel + cold-load/purify (MAP_JIT + AREA_READONLY)"
 make -C lisp-kernel/darwinarm64 -j"$NCPU" \
   "VC_REVISION=\"area-code\"" >>"$LOG" 2>&1 \
   || fail "kernel build failed (see $LOG)"

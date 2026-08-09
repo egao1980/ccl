@@ -104,8 +104,7 @@ _SP\name:
         ldur \dest, [\miscobj, #misc_header_offset]
         .endm
 
-/* Darwin W^X: optional dual-map bias (DARWIN_ARM64_DUAL_MAP).  Default
- * builds use plain br — pure/MAP_JIT code runs at its canonical VA. */
+/* Darwin W^X: purify RX + MAP_JIT; dynamic heap never executable. */
         .macro br_codevector reg
 #if defined(__APPLE__) && DARWIN_ARM64_DUAL_MAP
         lsr imm0, \reg, #40

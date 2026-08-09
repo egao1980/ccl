@@ -139,7 +139,7 @@ check_marked_extent(LispObj n, natural dnode, natural suffix_dnodes)
 #define ARM64_CODE_VECTOR_SENTINEL 0
 
 #if defined(DARWIN) && defined(ARM64)
-/* Dual-map bias retired.  PC/LR are always canonical (pure RX or MAP_JIT). */
+/* PC/LR are always the canonical VA (pure RX or MAP_JIT). */
 static inline Boolean
 darwin_arm64_pc_is_biased(LispObj xpc)
 {
@@ -2685,8 +2685,7 @@ purify(TCR *tcr, signed_natural param)               /* ppc-gc.c:2001-2048 */
     }
 #if defined(DARWIN) && defined(ARM64)
     /* ProtectMemory is PROT_NONE on Darwin/arm64 (stack guards).  Pure
-       code needs RX on the canonical VA — same as image.c AREA_READONLY.
-       No HEAP_EXEC_BIAS alias: dual-map is retired. */
+       code needs RX on the canonical VA — same as image.c AREA_READONLY. */
     {
       natural span = align_to_power_of_2(new_pure_area->active - new_pure_area->low,
                                          log2_page_size);

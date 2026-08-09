@@ -53,8 +53,7 @@
 
 #if defined(DARWIN) && defined(ARM64)
 /* MAP_JIT code heap (AREA_CODE stand-in).  Executable lisp lives here or
-   in AREA_READONLY after purify — never in the RW dynamic heap.  Dual-map
-   / HEAP_EXEC_BIAS is retired. */
+   in AREA_READONLY after purify — never in the RW dynamic heap. */
 BytePtr darwin_arm64_code_low = NULL;
 BytePtr darwin_arm64_code_active = NULL;
 

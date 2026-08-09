@@ -807,10 +807,7 @@
 ;;; vector as `object`).  Call scratch must NEVER be an allocatable
 ;;; arg/imm/temp-with-ABI-meaning -- v2 cont-71 class; temp0 is dead at
 ;;; every call boundary (callee prologue reads only nfn).
-;;; Darwin W^X: production is purify RX + MAP_JIT at the canonical VA.
-;;; HEAP_EXEC_BIAS dual-map is retired — must stay nil here (this file
-;;; loads after arm64-backend and previously overwrote its nil with t,
-;;; baking bias into every call/jump-known-* site).
+;;; Darwin W^X: purify RX + MAP_JIT at the canonical VA.
 (defun darwinarm64-heap-exec-bias-p ()
   nil)
 
