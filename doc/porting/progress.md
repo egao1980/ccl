@@ -1,5 +1,184 @@
 # Progress notes on an arm64 port
 
+
+## August 2026 — AREA_CODE / dual-map retired
+
+* Executable code = MAP_JIT code heap (`darwin_arm64_set_code_heap`) from
+  cold-load; purify copies into `AREA_READONLY` (RX). Dynamic heap is RW only.
+* Removed `HEAP_EXEC_BIAS` NX redirect, `mach_vm_remap` aliases, and
+  `rebuild-ccl` DUAL_MAP 1→0 two-phase kernel / host faslop surgery.
+* WP only in kernel C (`darwin_arm64_jit_*`). `*darwinarm64-map-jit-fasls*`
+  defaults to T. Native compile (incl. `compile-file` / eval-when) always
+  MAP_JIT — heap is NX; fasl dump reads MAP_JIT bytes.
+* Gate: `./tools/rebuild-darwinarm64-unbiased.sh` (single kernel) and
+  stock-shaped `(rebuild-ccl :full t)`.
+
+## August 2026 — architecture stop (do not circle)
+
+* Superseded by AREA_CODE retirement above (2026-08-09).
+
+## August 2026 — unbiased + DUAL_MAP=0
+
+* `darwinarm64-heap-exec-bias-p` stays `nil` (vinsns no longer overrides backend).
+* Full cross-bootstrap + cold-load + `:purify t` produces an unbiased image.
+* Kernel / `platform-darwinarm64.h` default `DARWIN_ARM64_DUAL_MAP=0`.
+* Compiled `#_` / math / cocoa CDB / purify smokes green on DM=0.
+* Interpreted `%ff-call` landed; frame re-establish after `_SPffcall` (needs
+  image rebuild from boot after tip `3ba8197b`). Mid-session vinsns reload
+  + `save-application` corrupts the image — always rebuild from bootstrap.
+* **OBJC-SUPPORT + NSString smoke green** (surgical tip reload into image;
+  `tools/darwin-objc-bridge-smoke.lisp`): skip `:variadic` for `objc_msgSend*`;
+  aapcs64 N-word; exception globals via `%set-kernel-global-ptr-from-offset`;
+  cocoa CDB shims (`YES`/`NO`, msgsend prototypes, `instancetype`/generics/
+  soft id`, NSConstantString); `initialized-nsobject-p` → `:objc_object`.
+* **N-word/varargs ungated** (lazy `objc-method-signature-info` compile).
+  ≤128-bit records expand to N× `:unsigned-doubleword`/`%%get-unsigned-longlong`
+  (CCL x8664-shaped).
+* **substring heisenbug = Apple arm64 tagged pointers**, not N-word RA:
+  `tagged-objc-instance-p` used x86 low-nibble test; arm64 uses bit 63.
+  Short NSStrings failed `recognize-objc-object` all-or-nothing per process.
+* **Bare `(require "OBJC-SUPPORT")` SIGSEGVs** on stale image; tip reload of
+  `%ff-call` / `expand-ff-call` / expander / `aapcs64-ff-call` first → ~OK.
+  Integrate via full unbiased rebuild (do not mid-session `save-application`).
+* **Require residual flake fixed:** NXArgv clear used
+  `(paref … (:* :char) 1)` — byte index, smashes `argv[0]`. Symptom:
+  intermittent `os_unfair_lock_lock` SIGSEGV in Cocoa `dlopen`
+  (fault ≈ `cs_area.high+0x4c10`). Fix: `(:* (:* :char))` like `jni.lisp`.
+* **Open-issue batch (tip; bake with unbiased rebuild):**
+  - Darwin method varargs: AAPCS64 stack-only after fixed args
+    (`%process-varargs-list` / send compiler) — `#/stringWithFormat:` OK.
+  - Protocol: `%ensure-class-declaration` + CDB inject scaffolding;
+    `ns:protocol` printer always defined.
+  - arm64 `%throw` LAP; `%throwing-through-cleanup-p` (nthrow1value via
+    tsp nodes=4; nthrowvalues via consecutive savefn=0); lazy ObjC
+    callback trampoline + `objc-propagate-throw`.
+  - Smoke: `tools/darwin-open-issues-smoke.lisp` (surgical),
+    `tools/throwing-cleanup-smoke.lisp` (surgical),
+    `tools/darwin-clean-build-smoke.lisp` (post-rebuild, no reload).
+* **Clean-build gate:** `./tools/rebuild-darwinarm64-unbiased.sh`
+  (Rosetta `dx86cl64` + `darwin-arm64-headers`). Step 4 ends with
+  `darwin-clean-build-smoke` — fails if image lacks baked `%throw` /
+  objc tip. Log: `/tmp/darwinarm64-rebuild-unbiased.log`.
+
+## August 2026 — Darwin/arm64 boot image (egao1980)
+
+Built `arm64-boot.image` via host CCL 1.13 (Rosetta) and got the native
+kernel past image load into cold load.
+
+### Bootstrap (host)
+
+* Stock 1.13 lacks `aapcs64-ff-call` / `arm64-lap-function` nx1 hook —
+  load arm64-branch `nxenv.lisp`, `backend.lisp`, `nx1.lisp` first
+  (`tools/bootstrap-darwinarm64-boot.lisp`).
+* **Must reload `acode-rewrite.lisp` after nxenv** — loading nxenv
+  reassigns operator IDs; without reload, `aapcs64-ff-call` has no
+  rewrite entry and `%setf-macptr` of `(ff-call … :address)` becomes
+  `mov xN,rnil` (x23=`rnil`).
+* `tools/xdarwinarm64.lisp` must load `compile-ccl.lisp` (not fasl) and
+  patch arch `nil-value` to Darwin static layout.
+
+### Kernel / image load (Darwin W^X + ASLR)
+
+* Static/image bases cannot sit in low memory. Darwin uses
+  `STATIC_BASE_ADDRESS=#x200000000`, `IMAGE_BASE=#x300000000000`
+  (platform-darwinarm64.h + xarm64fasload darwin backend).
+* File `mmap`+`MAP_FIXED` fails for nonzero file offsets → `MapFile`
+  uses anon commit + `read` (Windows-style).
+* Heap mapped RW (no RWX); do **not** RX-protect dynamic (needs stores).
+* `mrs ctr_el0` SIGILL on Apple Silicon → `sys_icache_invalidate`.
+* Darwin `arm64-trap-support` xp accessors use measured ucontext offsets
+  (not Linux `mcontext.regs`).
+* `%kernel-import` returns a **fixnum-locative** (raw addr, PPC-style);
+  `_SPffcall` treats non-macptr bits as the entry point (fixed subtag
+  compare to use `w2`, not stale `imm2`).
+* JIT path (later): Apple `MAP_JIT` + `pthread_jit_write_protect_np` /
+  `pthread_jit_write_with_callback_np` — same model as **LuaJIT /
+  V8 / JSC / CPython copy-and-patch / PyPy / Wasmtime** (see
+  `darwin.md` cross-runtime survey). CCL already wants a separate
+  code-vector / MAP_JIT region on darwinarm64; do **not** MAP_JIT the
+  mixed heap.
+
+### Current status — cold load complete, REPL works
+
+Past `expand-ff-call` / rwlock. `%walk-dynamic-area` fault was
+**not** primarily the pre-trap clobber (still fixed): heap free zone
+below `allocptr` contained image trailer magic `nepOILCMegam`
+(LE swab of `OpenMCLImage`). Cause: Darwin `MapFile` read
+OS-page-rounded (16KiB) nbytes from a 4KiB-padded section → pulled
+next file bytes into the zero pad that `walk-dynamic-area` walks as
+nil-conses toward the sentinel. Fix: commit 16KiB, read payload only.
+
+**W^X bring-up:** dual-map RX alias at `VA+HEAP_EXEC_BIAS`
+(`mach_vm_remap` + NX→RX redirect in `handle_protection_violation`).
+Cold load then died executing the `rename-package` docstring: GC was
+not updating RX-biased PC/LR/`savelr` locatives, so `RET` after
+compaction landed in reused heap. Fix: unbias/rebias in
+`mark_pc_root` / `locative_forwarding_address` / purify/impurify
+locref paths (`arm64-gc.c`).
+
+**Callbacks / MAP_JIT:** write fault at `0x3fdf` was failed RWX
+`mmap` (−1) + `%inc-ptr` in `%make-executable-page`. Fix: `MAP_JIT`
+(`#x0800`) + `pthread_jit_write_protect_np` when stamping trampolines
+(`l1-callbacks.lisp`, `arm64-callback-support.lisp`).
+
+**FFI load order:** `ffi-darwinarm64` `(require "FFI-LINUXARM64")`
+fell back to `.lisp` → `parse-file-options-line` → `STRING-TRIM`
+before `MISC`. Fix: cross-compile `ffi-linuxarm64.da64fsl` and
+`bin-load-provide` it before darwin FFI in `l1-boot-2`.
+
+**Milestone:** `./darm64cl --image-name arm64-boot.image` finishes
+cold load and reaches the listener (`DarwinARM6464`). Smoke:
+`(+ 1 2)` → 3, `(ash 1 40)` → 2^40, `:darwinarm64-target` in
+`*features*`.
+
+**W^X call tax (Aug 2026):** dual-map NX→RX redirect in the fault
+handler made every lisp→lisp call cost one Mach signal (~1µs→ms).
+Fix: add `HEAP_EXEC_BIAS` before `br`/`blr` to code-vectors in
+`spentry-D` (`br_codevector`), `call/jump-known-{symbol,function}`
+vinsns, and LAP `br-codevector`. After rebuild: funcall 1e6 ~2.5ms
+(was ~3.2s); `format`/`make-hash-table` string keys / CLOS match
+Rosetta. Rebuild: bootstrap boot image + `save-application` `:purify nil`.
+
+
+Cross-runtime JIT survey (LuaJIT / V8 / JSC / CPython / PyPy) in
+`darwin.md` — reinforces separate `AREA_CODE` + MAP_JIT, not mixed heap.
+
+### Smoke
+
+```
+make -C lisp-kernel/darwinarm64
+# host: arch -x86_64 ./dx86cl64 --no-init --batch < tools/bootstrap-darwinarm64-boot.lisp
+./darm64cl --image-name arm64-boot.image
+```
+
+## August 2026 — Darwin/arm64 kernel scaffold (egao1980)
+
+Started Apple Silicon kernel bring-up on top of the `arm64` branch
+(Linux/arm64 already boots + ANSI green).
+
+Added:
+
+* `lisp-kernel/darwinarm64/Makefile` → builds `darm64cl` (ASLR, no pagezero)
+* Expanded `platform-darwinarm64.h` (xp accessors, ABI shims)
+* `lisp-kernel/arm64-darwin-mach.c` — full Mach exception server
+  (UUOs via EXC_BAD_INSTRUCTION → synthetic ucontext → signal_handler)
+* `darwin_sigreturn` in `arm64-asmutils.s`; Darwin `pseudo_sigreturn` is
+  `udf #0` (re-enters Mach for `do_pseudo_sigreturn`)
+* `tools/xdarwinarm64.lisp` (alias of the darwinarm64 cross-setup)
+
+Dual-map: eager remap on (`DARWIN_ARM64_DUAL_MAP=1`); NX redirect
+without remap-in-handler (fixed purified `#_` compile livelock).
+Production `:purify t` + MAP_JIT runtime.  Smoke timeouts via
+`tools/with-timeout`.  Still open: ASLR rnil-relative statics.
+`_SPffcall` stack-arg SP bump (GPR 9+), Darwin variadic-on-stack
+(`:variadic` sentinel), and Darwin natural-size packing for
+non-variadic stack overflow landed.  MAP_JIT code heap + conditional
+`HEAP_EXEC_BIAS` (IMAGE_BASE only) landed for runtime compile;
+fasl cold-load still uses the dual-mapped heap (WP-off would NX
+earlier MAP_JIT pages).  Mach exception ports are on
+(`use_mach_exception_handling`).  Save policy remains `:purify nil`
+(`tools/save-darwinarm64-image.lisp`) until dual-map is dropped.
+
 ## May 21 – June 23
 I looked a bit at Manfred Bergmann’s code at
 https://github.com/mdbergmann/ccl/tree/arm64-arch-foundation. This code is
@@ -13,7 +192,7 @@ platforms will stop supporting the TBI (top byte ignore) feature that
 the high tag scheme depends on.
 
 I used the [ccl-ffigen](https://github.com/Clozure/ccl-ffigen) tool
-to process `.h` files.  This worked; the `.ffi` files will need to be
+to process `.h` files.  The `.ffi` files will need to be
 translated by Lisp code into the `.cdb` files that the `#_` and `#$`
 reader macros consult.
 
@@ -195,3 +374,18 @@ The register and stack usage conventions for lisp code and external
 (or foreign) are completely different.  For arm64, the AAPCS64 document
 describes the standard ABI.  Apple platforms diverge from the
 standard ABI in a few places.  See https://developer.apple.com/documentation/xcode/writing-arm64-code-for-apple-platforms for information about that.
+
+### ANSI suite green (post NX-bias) — remaining flakes fixed
+
+* **`CCL.40055-3`**: test bug in ccl-tests — bare `require-type` read as
+  `CL-TEST::REQUIRE-TYPE`. Fixed with `ccl:require-type` (see egao1980/ccl-tests).
+* **`ENSURE-DIRECTORIES-EXIST.8`**: needs empty `scratch/`; `run-tests` now
+  `rm -rf scratch` after `make clean`.
+* **Intermittent SIGILL** (`Unhandled exception 4 … neither udf nor brk`) during
+  monolithic `:compile t` runs: `arm64-lap-generate-code` never called
+  `%make-code-executable` (ARM32/PPC/nfasload already did). Fresh codevectors
+  could hit a stale I-cache line on the RX dual-map alias. Fixed in
+  `compiler/ARM64/arm64-lap.lisp`. Also tear down RX alias in `UnCommitMemory`
+  before replacing the RW mapping (`lisp-kernel/memory.c`).
+* Verified: 6/6 consecutive full `run-tests` + ccl-specific group, 0 failures.
+
