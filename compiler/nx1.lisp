@@ -1421,6 +1421,7 @@
   (let* ((specs ())         
          (vals ())
          (register-spec-seen nil)
+         (structure-return-seen nil)
          (arg-specs (butlast arg-specs-and-result-spec))
          (result-spec (car (last arg-specs-and-result-spec))))
     (unless (evenp (length arg-specs))
@@ -1434,14 +1435,23 @@
           (progn 
             (push arg-keyword specs)
             (push value vals))
-          (if (eq arg-keyword :registers)
-            (if register-spec-seen
-              (error "duplicate :registers in ~s" arg-specs-and-result-spec)
-              (progn
-                (setq register-spec-seen t)
-                (push arg-keyword specs)
-                (push value vals)))
-            (error "Unknown argument spec: ~s" arg-keyword)))))
+          (cond ((eq arg-keyword :registers)
+                 (if register-spec-seen
+                   (error "duplicate :registers in ~s" arg-specs-and-result-spec)
+                   (progn
+                     (setq register-spec-seen t)
+                     (push arg-keyword specs)
+                     (push value vals))))
+                ((eq arg-keyword :structure-return)
+                 ;; AAPCS64 indirect result (x8); not a GP/FP argument slot.
+                 (if structure-return-seen
+                   (error "duplicate :structure-return in ~s" arg-specs-and-result-spec)
+                   (progn
+                     (setq structure-return-seen t)
+                     (push arg-keyword specs)
+                     (push value vals))))
+                (t
+                 (error "Unknown argument spec: ~s" arg-keyword))))))
     (unless (or (eq result-spec :void)
 		(memq result-spec *arg-spec-keywords*))
       (error "Unknown result spec: ~s" result-spec))

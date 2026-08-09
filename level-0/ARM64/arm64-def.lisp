@@ -758,6 +758,122 @@
   (restore-full-lisp-context)
   (ret))
 
+;;; Like %do-ff-call, but capture all result GPRs/FPRs into REGBUF
+;;; via .SPffcall-return-registers (arg_y = regbuf macptr).
+(defarm64lapfunction %do-ff-call-return-registers ((regbuf 0) (argbuf arg_x) (fp-regs arg_y) (entry arg_z))
+  (check-nargs 4)
+  (ldr temp0 (:@ vsp (:$ 0)))           ; regbuf macptr
+  (add vsp vsp (:$ 8))
+  (save-lisp-context)
+  (vpush temp0)                         ; regbuf
+  (vpush argbuf)
+  (vpush fp-regs)
+  (vpush entry)
+  ;; vsp: [regbuf][argbuf][fp-regs][entry]
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))
+  (add imm2 temp1 (:$ '6))
+  (add imm2 imm2 (:$ (1- arm64::dnode-size)))
+  (and imm2 imm2 (:$ (- arm64::dnode-size)))
+  (sub imm0 imm2 (:$ '1))
+  (lsl imm0 imm0 (:$ (- arm64::num-subtag-bits arm64::fixnumshift)))
+  (add imm0 imm0 (:$ arm64::subtag-u64-vector))
+  (mov imm1 sp)
+  (sub sp sp imm2)
+  (stp imm0 imm1 (:@ sp (:$ 0)))
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 sp (:$ arm64::c-frame.param0))
+  @copy
+  (cbz temp1 @copydone)
+  (ldr temp0 (:@ imm0 (:$ 0)))
+  (str temp0 (:@ imm1 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 imm1 (:$ 8))
+  (sub temp1 temp1 (:$ '1))
+  (b @copy)
+  @copydone
+  (ldr fp-regs (:@ vsp (:$ 8)))
+  (ldr entry (:@ vsp (:$ 0)))
+  (macptr-ptr imm0 fp-regs)
+  (ldr d0 (:@ imm0 (:$ 0)))
+  (ldr d1 (:@ imm0 (:$ 8)))
+  (ldr d2 (:@ imm0 (:$ 16)))
+  (ldr d3 (:@ imm0 (:$ 24)))
+  (ldr d4 (:@ imm0 (:$ 32)))
+  (ldr d5 (:@ imm0 (:$ 40)))
+  (ldr d6 (:@ imm0 (:$ 48)))
+  (ldr d7 (:@ imm0 (:$ 56)))
+  (ldr arg_y (:@ vsp (:$ 24)))          ; regbuf macptr → arg_y
+  (call-subprim .SPffcall-return-registers)
+  (mov arg_z rnil)
+  (restore-full-lisp-context)
+  (ret))
+
+;;; Memory composite return: set x8 (arg_w) from X8PTR before .SPffcall.
+(defarm64lapfunction %do-ff-call-structure-return ((x8ptr 8) (result 0) (argbuf arg_x) (fp-regs arg_y) (entry arg_z))
+  (check-nargs 5)
+  (ldr temp0 (:@ vsp (:$ 0)))           ; result
+  (ldr temp1 (:@ vsp (:$ 8)))           ; x8ptr
+  (add vsp vsp (:$ 16))
+  (save-lisp-context)
+  (vpush temp0)                         ; result
+  (vpush temp1)                         ; x8ptr
+  (vpush argbuf)
+  (vpush fp-regs)
+  (vpush entry)
+  ;; vsp: [result][x8ptr][argbuf][fp-regs][entry]
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))
+  (add imm2 temp1 (:$ '6))
+  (add imm2 imm2 (:$ (1- arm64::dnode-size)))
+  (and imm2 imm2 (:$ (- arm64::dnode-size)))
+  (sub imm0 imm2 (:$ '1))
+  (lsl imm0 imm0 (:$ (- arm64::num-subtag-bits arm64::fixnumshift)))
+  (add imm0 imm0 (:$ arm64::subtag-u64-vector))
+  (mov imm1 sp)
+  (sub sp sp imm2)
+  (stp imm0 imm1 (:@ sp (:$ 0)))
+  (ldr argbuf (:@ vsp (:$ 16)))
+  (macptr-ptr imm0 argbuf)
+  (ldr temp1 (:@ imm0 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 sp (:$ arm64::c-frame.param0))
+  @copy
+  (cbz temp1 @copydone)
+  (ldr temp0 (:@ imm0 (:$ 0)))
+  (str temp0 (:@ imm1 (:$ 0)))
+  (add imm0 imm0 (:$ 8))
+  (add imm1 imm1 (:$ 8))
+  (sub temp1 temp1 (:$ '1))
+  (b @copy)
+  @copydone
+  (ldr fp-regs (:@ vsp (:$ 8)))
+  (ldr entry (:@ vsp (:$ 0)))
+  (macptr-ptr imm0 fp-regs)
+  (ldr d0 (:@ imm0 (:$ 0)))
+  (ldr d1 (:@ imm0 (:$ 8)))
+  (ldr d2 (:@ imm0 (:$ 16)))
+  (ldr d3 (:@ imm0 (:$ 24)))
+  (ldr d4 (:@ imm0 (:$ 32)))
+  (ldr d5 (:@ imm0 (:$ 40)))
+  (ldr d6 (:@ imm0 (:$ 48)))
+  (ldr d7 (:@ imm0 (:$ 56)))
+  (ldr temp0 (:@ vsp (:$ 24)))          ; x8ptr
+  (macptr-ptr arg_w temp0)              ; AAPCS64 indirect result → x8
+  (call-subprim .SPffcall)
+  (ldr temp0 (:@ vsp (:$ 32)))          ; result
+  (macptr-ptr imm1 temp0)
+  (str imm0 (:@ imm1 (:$ 0)))
+  (str d0 (:@ imm1 (:$ 8)))
+  (mov arg_z rnil)
+  (restore-full-lisp-context)
+  (ret))
+
 (defun %ff-call (entry &rest specs-and-vals)
   (declare (dynamic-extent specs-and-vals))
   (let* ((len (length specs-and-vals))
@@ -766,7 +882,9 @@
     (let* ((result-spec (or (car (last specs-and-vals)) :void))
            (nargs (ash (the fixnum (1- len)) -1))
            (n-fp-args 0)
-           (n-gpr-args 0))
+           (n-gpr-args 0)
+           (regbuf nil)
+           (struct-ret nil))
       (declare (fixnum nargs n-fp-args n-gpr-args))
       (ecase result-spec
         ((:address :unsigned-doubleword :signed-doubleword
@@ -793,6 +911,7 @@
               (when (> n-fp-args 8)
                 (incf overflow-words)))
              (:registers)
+             (:structure-return)
              (:variadic)
              (t (if (typep spec 'unsigned-byte)
                   ;; N-word struct: each word is a GPR (then overflow).
@@ -824,6 +943,8 @@
                  (declare (fixnum i))
                  (case spec
                    (:variadic)
+                   (:registers (setq regbuf val))
+                   (:structure-return (setq struct-ret val))
                    (:address
                     (incf n-gpr-args)
                     (cond ((<= n-gpr-args 8)
@@ -866,7 +987,6 @@
                            (setf (%get-single-float argbuf other-offset) val)
                            (incf other-offset 8)
                            (incf n-fp-args))))
-                   (:registers)
                    (t
                     ;; N-word struct from macptr: consecutive GPR words.
                     (let* ((p 0))
@@ -883,7 +1003,13 @@
                                      (%get-ptr val p))
                                (incf other-offset 8)))
                         (incf p 8))))))
-               (%do-ff-call result-buf argbuf fp-args entry)
+               (cond (regbuf
+                      (%do-ff-call-return-registers regbuf argbuf fp-args entry))
+                     (struct-ret
+                      (%do-ff-call-structure-return struct-ret result-buf
+                                                    argbuf fp-args entry))
+                     (t
+                      (%do-ff-call result-buf argbuf fp-args entry)))
                (ecase result-spec
                  (:void nil)
                  (:address (%get-ptr result-buf 0))

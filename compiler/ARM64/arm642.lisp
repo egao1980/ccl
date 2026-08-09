@@ -9121,6 +9121,8 @@
          (ngpr-args 0)
          (fp-loads ())
          (force-stack nil)
+         (return-registers nil)
+         (structure-return nil)
          (darwin-os-p (eq (backend-target-os *target-backend*) :darwinarm64)))
     (declare (fixnum nsingle-floats ndouble-floats nfpr-args ngpr-args
                      nother-words overflow-bytes gpr-offset other-offset
@@ -9152,6 +9154,10 @@
                  (incf nother-words (ash (+ overflow-bytes 7) -3))
                  (setq overflow-bytes 0)
                  (setq force-stack t)))
+              ((eq argspec :registers)
+               (setq return-registers t))
+              ((eq argspec :structure-return)
+               (setq structure-return t))
               ((or (eq argspec :double-float) (eq argspec :single-float))
                (cond (force-stack
                       (note-overflow argspec))
@@ -9220,6 +9226,18 @@
                          (arm642-align-up other-byte-offset 8))
                    (setq other-offset (ash other-byte-offset -3))
                    (setq force-stack t)))
+                ((eq spec :registers)
+                 (let* ((reg (arm642-one-untargeted-reg-form
+                              seg valform arm64::arg_z)))
+                   (unless *arm642-reckless*
+                     (! trap-unless-macptr reg))
+                   (arm642-vpush-register seg reg)))
+                ((eq spec :structure-return)
+                 (let* ((reg (arm642-one-untargeted-reg-form
+                              seg valform arm64::arg_z)))
+                   (unless *arm642-reckless*
+                     (! trap-unless-macptr reg))
+                   (arm642-vpush-register seg reg)))
                 ((eq spec :double-float)
                  (let* ((df ($ 1 :class :fpr :mode :double-float)))
                    (arm642-one-targeted-reg-form seg valform df)
@@ -9318,8 +9336,18 @@
           (if (eq size :double-float)
             (! reload-double-c-arg ($ fpreg :class :fpr :mode :double-float) from)
             (! reload-single-c-arg ($ fpreg :class :fpr :mode :single-float) from))))
+      ;; :structure-return macptr → raw address in x8 (AAPCS64 IRLO).
+      ;; :registers macptr → arg_y for ffcall_return_registers.
+      ;; Entry point last into arg_z.  Order matches x8664.
+      (when structure-return
+        (arm642-vpop-register seg ($ arm64::arg_z))
+        (! macptr-to-structure-return-reg ($ arm64::arg_z)))
+      (when return-registers
+        (arm642-vpop-register seg ($ arm64::arg_y)))
       (arm642-vpop-register seg ($ arm64::arg_z))
-      (! ff-call)
+      (if return-registers
+        (! ff-call-return-registers)
+        (! ff-call))
       (setq *arm642-cstack* pre-frame-cstack)
       (when vreg
         (cond ((eq resultspec :void) (<- nil))

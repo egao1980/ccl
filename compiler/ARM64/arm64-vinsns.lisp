@@ -6626,6 +6626,26 @@
   (ldr temp (:@ rcontext temp))
   (blr temp))
 
+;;; Capture x0–x7 / d0–d7 into the regbuf macptr in arg_y (see
+;;; spentry-E-ffi.s ffcall_return_registers).  Used for AAPCS64
+;;; register-returned composites (HFA + ≤16-byte GPR aggregates).
+(define-arm64-vinsn (ff-call-return-registers :call :subprim) (()
+                                                               ()
+                                                               ((temp (:u64 #.arm64::imm1))))
+  (movz temp (:$ (:apply arm64::subprimitive-offset
+                         ".SPffcall-return-registers")))
+  (ldr temp (:@ rcontext temp))
+  (blr temp))
+
+;;; AAPCS64 indirect result location: raw address of the caller buffer
+;;; into x8 (= arg_w).  Must run immediately before ff-call so nothing
+;;; clobbers x8 afterwards.
+(define-arm64-vinsn macptr-to-structure-return-reg (()
+                                                    ((macptr :lisp))
+                                                    ((addr (:u64 #.arm64::imm0))))
+  (ldur addr (:@ macptr (:$ arm64::macptr.address)))
+  (mov arg_w addr))
+
 ;;; ============ eep.address ============
 ;;; PPC64 ppc64-vinsns.lisp:3829: load slot 1 (the address) of an
 ;;; external-entry-point gvector, trap if NIL (unresolved eep -- PPC's

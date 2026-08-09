@@ -33,9 +33,9 @@
                                         #'null-coerce-foreign-arg)
                                        (result-coerce
                                         #'null-coerce-foreign-result))
-  ;; Shared AAPCS64 path.  Darwin variadic-on-stack is handled in
-  ;; arm642-aapcs64-ff-call via the :variadic sentinel from
-  ;; %external-call-expander (CDB :void boundary).
+  ;; Shared AAPCS64 path (HFA / ≤16B GPR / x8 memory returns + HFA args).
+  ;; Darwin variadic-on-stack is handled in arm642-aapcs64-ff-call via
+  ;; the :variadic sentinel from %external-call-expander (CDB :void boundary).
   (arm64::expand-ff-call callform args
                          :arg-coerce arg-coerce
                          :result-coerce result-coerce))

@@ -439,10 +439,69 @@
 ;;;
 ;;;                                - Procedure Call Standard, § 6.9
 
-;;; If a returned struct is more than 16 bytes long, the caller will
-;;; reserve memory for the return value and pass a pointer to that
-;;; memory in register x8.  (Not as a hidden first argument, despite
-;;; the name of this function.)
+;;; AAPCS64 composite return / argument classification (IHI 0055 section 6.8-6.9):
+;;;   HFA  = 1..4 leaves of the same float/double (nested records flatten)
+;;;   GPR  = non-HFA composite <= 16 bytes -> x0/x1 (args: consecutive GPRs)
+;;;   MEM  = otherwise -> caller buffer via x8 (args: by reference)
+;;;
+;;; Apple ObjC on arm64 never uses objc_msgSend*_stret; register and
+;;; memory returns both go through objc_msgSend with the standard ABI.
+;;; The legacy FTD predicate name still means "memory / x8", not "first GP arg".
+
+(defun arm64::hfa-leaf-reps (ftype &optional (base-bits 0))
+  "Flatten FTYPE into ((:single-float|:double-float|:other) . byte-offset) leaves."
+  (ensure-foreign-type-bits ftype)
+  (collect ((leaves))
+    (labels ((walk (ty base)
+               (cond ((typep ty 'foreign-record-type)
+                      (ensure-foreign-type-bits ty)
+                      (dolist (f (foreign-record-type-fields ty))
+                        (walk (foreign-record-field-type f)
+                              (+ base (foreign-record-field-offset f)))))
+                     ((typep ty 'foreign-array-type)
+                      (let* ((el (foreign-array-type-element-type ty))
+                             (dims (foreign-array-type-dimensions ty))
+                             (n (if (and (consp dims) (integerp (car dims)))
+                                  (car dims)
+                                  0))
+                             (eb (ensure-foreign-type-bits el)))
+                        (dotimes (i n)
+                          (walk el (+ base (* i eb))))))
+                     ((typep ty 'foreign-single-float-type)
+                      (leaves (cons :single-float (ash base -3))))
+                     ((typep ty 'foreign-double-float-type)
+                      (leaves (cons :double-float (ash base -3))))
+                     (t
+                      (leaves (cons :other (ash base -3)))))))
+      (walk ftype base-bits)
+      (leaves))))
+
+(defun arm64::record-hfa-info (rtype)
+  "Return (values :single-float|:double-float count) if RTYPE is an HFA, else NIL."
+  (let* ((ftype (if (typep rtype 'foreign-type)
+                  rtype
+                  (parse-foreign-type rtype)))
+         (leaves (and (typep ftype 'foreign-record-type)
+                      (arm64::hfa-leaf-reps ftype)))
+         (n (length leaves))
+         (rep (car (car leaves))))
+    (when (and leaves
+               (<= 1 n 4)
+               (not (eq rep :other))
+               (every (lambda (leaf) (eq (car leaf) rep)) leaves))
+      (values rep n))))
+
+(defun arm64::classify-record-return (rtype)
+  (let* ((ftype (if (typep rtype 'foreign-type)
+                  rtype
+                  (parse-foreign-type rtype))))
+    (ensure-foreign-type-bits ftype)
+    (cond ((arm64::record-hfa-info ftype) :hfa)
+          ((<= (foreign-type-bits ftype) 128) :gpr)
+          (t :memory))))
+
+;;; T => composite returned via the indirect result location (x8).
+;;; Despite the historical name this is NOT a hidden first GP argument.
 (defun arm64::record-type-returns-structure-as-first-arg (rtype)
   (when (and rtype
              (not (typep rtype 'unsigned-byte))
@@ -450,8 +509,41 @@
                           :test #'eq)))
     (let* ((ftype (if (typep rtype 'foreign-type)
                     rtype
-                    (parse-foreign-type rtype))))
-      (> (ensure-foreign-type-bits ftype) 128))))
+                    (ignore-errors (parse-foreign-type rtype)))))
+      (and (typep ftype 'foreign-record-type)
+           (eq (arm64::classify-record-return ftype) :memory)))))
+
+(defun arm64::struct-from-regbuf-values (r rtype regbuf)
+  "Copy AAPCS64 register-returned composite from REGBUF into R.
+REGBUF layout matches ffcall_return_registers: x0-x7 @0..56, d0-d7 @64..120."
+  (let* ((ftype (if (typep rtype 'foreign-type)
+                  rtype
+                  (parse-foreign-type rtype)))
+         (class (arm64::classify-record-return ftype)))
+    (collect ((forms))
+      (ecase class
+        (:hfa
+         (multiple-value-bind (rep count)
+             (arm64::record-hfa-info ftype)
+           (let* ((leaves (arm64::hfa-leaf-reps ftype))
+                  (fpr0 64))
+             (dotimes (i count)
+               (let* ((byte-off (cdr (nth i leaves)))
+                      (src (+ fpr0 (* i 8))))
+                 (if (eq rep :double-float)
+                   (forms `(setf (%get-double-float ,r ,byte-off)
+                                 (%get-double-float ,regbuf ,src)))
+                   (forms `(setf (%get-single-float ,r ,byte-off)
+                                 (%get-single-float ,regbuf ,src)))))))))
+        (:gpr
+         (let* ((bits (ensure-foreign-type-bits ftype))
+                (nbytes (ash (+ bits 7) -3)))
+           ;; 32-bit chunks avoid consing bignums on the interpreted path.
+           (do* ((b 0 (+ b 4)))
+                ((>= b nbytes))
+             (forms `(setf (%get-unsigned-long ,r ,b)
+                           (%get-unsigned-long ,regbuf ,b)))))))
+      `(progn ,@(forms) nil))))
 
 (defun arm64::expand-ff-call (callform args
                               &key
@@ -462,12 +554,19 @@ Darwin variadic-on-stack is enforced in aapcs64-ff-call when a
 :variadic sentinel (from %external-call-expander at the CDB
 :void boundary) appears in the arg list.
 
-Records of <=128 bits become N :unsigned-doubleword
-%%get-unsigned-longlong loads (same shape as CCL x8664 integer-in-GPR
-records).  That path uses the proven getu64/set-c-arg codegen;
-passing a bare macptr as an N-word argspec was a heisenbug on Darwin
-arm64 (stable-wrong return across a process, flaky across ASLR)."
+Composite returns:
+  :hfa / :gpr -> :registers regbuf + unpack (never a fake x0 result pointer)
+  :memory     -> :structure-return buffer (callee writes via x8)
+
+Composite args:
+  HFA         -> N :single-float / :double-float field loads
+  <=128 bits   -> N :unsigned-doubleword GPR loads
+  larger      -> :address (by reference)"
   (let* ((result-type-spec (or (car (last args)) :void))
+         (regbuf nil)
+         (result-temp nil)
+         (result-form nil)
+         (struct-result-type nil)
          (structure-arg-temp nil))
     (multiple-value-bind (result-type error)
         (ignore-errors (parse-foreign-type result-type-spec))
@@ -478,10 +577,19 @@ arm64 (stable-wrong return across a process, flaky across ASLR)."
         (when (eq (car args) :monitor-exception-ports)
           (argforms (pop args)))
         (when (typep result-type 'foreign-record-type)
-          (setq result-type *void-foreign-type*
+          (setq result-form (pop args)
+                struct-result-type result-type
+                result-type *void-foreign-type*
                 result-type-spec :void)
-          (argforms :address)
-          (argforms (pop args)))
+          (ecase (arm64::classify-record-return struct-result-type)
+            ((:hfa :gpr)
+             (setq regbuf (gensym)
+                   result-temp (gensym))
+             (argforms :registers)
+             (argforms regbuf))
+            (:memory
+             (argforms :structure-return)
+             (argforms result-form))))
         (unless (evenp (length args))
           (error "~s should be an even-length list of alternating foreign types and values" args))
         (do* ((args args (cddr args)))
@@ -490,44 +598,75 @@ arm64 (stable-wrong return across a process, flaky across ASLR)."
                  (arg-value-form (cadr args)))
             (if (or (member arg-type-spec *foreign-representation-type-keywords*
                             :test #'eq)
-                    (typep arg-type-spec 'unsigned-byte))
+                    (typep arg-type-spec 'unsigned-byte)
+                    (eq arg-type-spec :registers)
+                    (eq arg-type-spec :structure-return)
+                    (eq arg-type-spec :variadic))
               (progn
                 (argforms arg-type-spec)
                 (argforms arg-value-form))
               (let* ((ftype (parse-foreign-type arg-type-spec)))
                 (if (typep ftype 'foreign-record-type)
-                  (let* ((bits (ensure-foreign-type-bits ftype)))
-                    (cond ((<= bits 64)
-                           (argforms :unsigned-doubleword)
-                           (argforms `(%%get-unsigned-longlong ,arg-value-form 0)))
-                          ((<= bits 128)
-                           ;; Integer-ish record in GPRs (e.g. NSRange).
-                           ;; Bind once so multi-word loads share the same macptr.
+                  (multiple-value-bind (hfa-rep hfa-count)
+                      (arm64::record-hfa-info ftype)
+                    (cond (hfa-rep
                            (unless structure-arg-temp
                              (setq structure-arg-temp (gensym)))
-                           (let* ((nwords (ceiling bits 64))
+                           (let* ((leaves (arm64::hfa-leaf-reps ftype))
                                   (valform `(%setf-macptr ,structure-arg-temp
                                                           ,arg-value-form)))
-                             (dotimes (i nwords)
-                               (argforms :unsigned-doubleword)
-                               (argforms `(%%get-unsigned-longlong ,valform
-                                            ,(* i 8)))
+                             (dotimes (i hfa-count)
+                               (argforms hfa-rep)
+                               (argforms `(,(if (eq hfa-rep :double-float)
+                                              '%get-double-float
+                                              '%get-single-float)
+                                           ,valform
+                                           ,(cdr (nth i leaves))))
                                (setq valform structure-arg-temp))))
                           (t
-                           (argforms :address)
-                           (argforms arg-value-form))))
+                           (let* ((bits (ensure-foreign-type-bits ftype)))
+                             (cond ((<= bits 64)
+                                    (argforms :unsigned-doubleword)
+                                    (argforms `(%%get-unsigned-longlong
+                                                ,arg-value-form 0)))
+                                   ((<= bits 128)
+                                    (unless structure-arg-temp
+                                      (setq structure-arg-temp (gensym)))
+                                    (let* ((nwords (ceiling bits 64))
+                                           (valform `(%setf-macptr
+                                                      ,structure-arg-temp
+                                                      ,arg-value-form)))
+                                      (dotimes (i nwords)
+                                        (argforms :unsigned-doubleword)
+                                        (argforms `(%%get-unsigned-longlong
+                                                    ,valform ,(* i 8)))
+                                        (setq valform structure-arg-temp))))
+                                   (t
+                                    (argforms :address)
+                                    (argforms arg-value-form)))))))
                   (progn
                     (argforms (foreign-type-to-representation-type ftype))
                     (argforms (funcall arg-coerce arg-type-spec arg-value-form))))))))
         (argforms (foreign-type-to-representation-type result-type))
         (let ((call (funcall result-coerce result-type-spec
                              `(,@callform ,@(argforms)))))
-          (if structure-arg-temp
-            `(let* ((,structure-arg-temp (%null-ptr)))
-               (declare (dynamic-extent ,structure-arg-temp)
-                        (type macptr ,structure-arg-temp))
-               ,call)
+          (when structure-arg-temp
+            (setq call `(let* ((,structure-arg-temp (%null-ptr)))
+                          (declare (dynamic-extent ,structure-arg-temp)
+                                   (type macptr ,structure-arg-temp))
+                          ,call)))
+          (if regbuf
+            `(let* ((,result-temp (%null-ptr)))
+               (declare (dynamic-extent ,result-temp)
+                        (type macptr ,result-temp))
+               (%setf-macptr ,result-temp ,result-form)
+               ;; 8 GPRs + 8 FPRs; matches ffcall_return_registers.
+               (%stack-block ((,regbuf 128))
+                 ,call
+                 ,(arm64::struct-from-regbuf-values
+                   result-temp struct-result-type regbuf)))
             call))))))
+
 ;;; A resident (native) arm64 compiler is DEMAND-LOADED module by module,
 ;;; not dumped into the image the way the ppc/x86 ones are, so nothing pulls
 ;;; NXENV before nx1 needs it and the first (defun ...) dies on an undefined

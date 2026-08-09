@@ -1371,15 +1371,21 @@ argument lisp string."
 ;;; invisible-first-argument convention is used to return a structure
 ;;; and must NOT be used otherwise. (The Darwin ppc64 and all
 ;;; supported x86-64 ABIs often use more complicated structure return
-;;; conventions than ppc32 Darwin or ppc Linux.)  We should use
-;;; OBJC-MESSAGE-SEND-STRET to send any message that returns a
-;;; structure or union, regardless of how that structure return is
-;;; actually implemented.
+;;; conventions than ppc32 Darwin or ppc Linux.)  On Apple arm64 the
+;;; stret entry points do not exist — always use objc_msgSend /
+;;; objc_msgSendSuper; AAPCS64 (HFA / ≤16B GPR / x8) is handled by
+;;; expand-ff-call.  We should use OBJC-MESSAGE-SEND-STRET to send any
+;;; message that returns a structure or union, regardless of how that
+;;; structure return is actually implemented.
 
 (defmacro objc-message-send-stret (structptr receiver selector-name &rest argspecs)
     #+(or apple-objc cocotron-objc)
     (let* ((return-typespec (car (last argspecs)))
-           (entry-name (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
+           ;; Apple arm64 ObjC never exposes *_stret; composites use the
+           ;; standard AAPCS64 return convention via objc_msgSend.
+           (entry-name #+arm64-target "objc_msgSend"
+                       #-arm64-target
+                       (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
                          "objc_msgSend_stret"
                          "objc_msgSend")))
       (funcall (ftd-ff-call-expand-function *target-ftd*)
@@ -1406,7 +1412,9 @@ argument lisp string."
 (defmacro objc-message-send-stret-with-selector (structptr receiver selector &rest argspecs)
     #+(or apple-objc cocotron-objc)
     (let* ((return-typespec (car (last argspecs)))
-           (entry-name (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
+           (entry-name #+arm64-target "objc_msgSend"
+                       #-arm64-target
+                       (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
                          "objc_msgSend_stret"
                          "objc_msgSend")))
       (funcall (ftd-ff-call-expand-function *target-ftd*)
@@ -1489,7 +1497,9 @@ argument lisp string."
     (structptr super selector-name &rest argspecs)
   #+(or apple-objc cocotron-objc)
     (let* ((return-typespec (car (last argspecs)))
-           (entry-name (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
+           (entry-name #+arm64-target "objc_msgSendSuper"
+                       #-arm64-target
+                       (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
                          "objc_msgSendSuper_stret"
                          "objc_msgSendSuper")))
       (funcall (ftd-ff-call-expand-function *target-ftd*)
@@ -1518,7 +1528,9 @@ argument lisp string."
     (structptr super selector &rest argspecs)
   #+(or apple-objc cocotron-objc)
     (let* ((return-typespec (car (last argspecs)))
-           (entry-name (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
+           (entry-name #+arm64-target "objc_msgSendSuper"
+                       #-arm64-target
+                       (if (funcall (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*) return-typespec)
                          "objc_msgSendSuper_stret"
                          "objc_msgSendSuper")))
       (funcall (ftd-ff-call-expand-function *target-ftd*)

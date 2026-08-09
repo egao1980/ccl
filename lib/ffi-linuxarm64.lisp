@@ -42,15 +42,14 @@
 ;;;   - Composite size > 16 bytes: passed by reference to a caller-allocated
 ;;;     copy (single :address slot pointing to the copy).
 ;;;
-;;; Composite return rules (AAPCS64 §6.9):
-;;;   - Size <= 16 bytes (and not HFA): returned in X0/X1.
-;;;   - Size > 16 bytes (or HFA): caller allocates buffer, passes pointer
-;;;     in X8; function writes through X8 and returns void.
+;;; Composite return rules (AAPCS64 §6.9 + HFA §6.1.2.3 / §B.6):
+;;;   - HFA of 1–4 identical float/double leaves: returned in v0..vN
+;;;     (d0..dN / s0..sN), regardless of total size (e.g. NSRect = 4×double).
+;;;   - Non-HFA size ≤ 16 bytes: returned in X0/X1.
+;;;   - Otherwise: caller allocates buffer, passes pointer in X8.
 ;;;
-;;; HFA detection is a TODO; we conservatively use the size threshold only.
-;;; This is slightly pessimistic for HFA-eligible aggregates (which AAPCS64
-;;; allows in V-registers regardless of total size up to 4 elements) but is
-;;; never incorrect — pessimistic-but-correct over optimistic-but-wrong.
+;;; Classification + expand-ff-call live in arm64-backend.lisp
+;;; (arm64::classify-record-return / arm64::expand-ff-call).
 
 (in-package "CCL")
 
@@ -78,18 +77,8 @@
 ;;; result-area pointer.  We encode the size threshold explicitly.
 
 (defun arm64-linux::record-type-returns-structure-as-first-arg (rtype)
-  (when (and rtype
-             (not (typep rtype 'unsigned-byte))
-             (not (member rtype *foreign-representation-type-keywords*
-                          :test #'eq)))
-    (let* ((ftype (if (typep rtype 'foreign-type)
-                    rtype
-                    (parse-foreign-type rtype))))
-      (when (typep ftype 'foreign-record-type)
-        (ensure-foreign-type-bits ftype)
-        ;;; ARM64-DEVIATION: > 128 bits (16 bytes) triggers X8 indirect
-        ;;; return per AAPCS64 §6.9.  PPC64 source returns T unconditionally.
-        (> (foreign-type-bits ftype) 128)))))
+  ;; Shared classifier: T only for AAPCS64 x8 memory returns (not HFA, not ≤16B).
+  (arm64::record-type-returns-structure-as-first-arg rtype))
 
 
 ;;;-----------------------------------------------------------------------
