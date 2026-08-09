@@ -687,11 +687,26 @@
 (deffaslop $fasl-code-vector (s)
   (let* ((element-count (%fasl-read-count s))
          (size-in-bytes (* 4 element-count))
-         (vector (allocate-typed-vector :code-vector element-count)))
+         ;; Darwin/arm64 AREA_CODE: MAP_JIT for executable fasl code.
+         ;; Purify copies into AREA_READONLY.  Flag defaults to T.
+         (use-jit #+darwinarm64-target
+                  (and (boundp '*darwinarm64-map-jit-fasls*)
+                       *darwinarm64-map-jit-fasls*
+                       (fboundp '%allocate-code-vector))
+                  #-darwinarm64-target
+                  nil)
+         (vector (if use-jit
+                   (%allocate-code-vector element-count)
+                   (allocate-typed-vector :code-vector element-count))))
     (declare (fixnum element-count size-in-bytes))
     (%epushval s vector)
-    (%fasl-read-n-bytes s vector 0 size-in-bytes)
-    (%make-code-executable vector)
+    (if use-jit
+      (let ((scratch (make-array size-in-bytes :element-type '(unsigned-byte 8))))
+        (%fasl-read-n-bytes s scratch 0 size-in-bytes)
+        (%darwinarm64-jit-install-code vector scratch size-in-bytes))
+      (progn
+        (%fasl-read-n-bytes s vector 0 size-in-bytes)
+        (%make-code-executable vector)))
     vector))
 
 (defun fasl-read-gvector (s subtype)
