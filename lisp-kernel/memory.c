@@ -101,7 +101,14 @@ darwin_arm64_remap_exec_alias(LogicalAddress start, natural len)
         probe <= rx &&
         (probe + vmsize) >= (rx + (mach_vm_size_t)len) &&
         (info.protection & VM_PROT_EXECUTE) != 0) {
-      return true;
+      /* RX present is not enough: a stale alias (heap page recycled /
+         remapped under the canonical VA while the bias mapping still
+         points at old zeroed pages) looks executable but fetches as
+         udf #0.  Require the first word to match before skipping. */
+      if (*(volatile natural *)(natural)start ==
+          *(volatile natural *)(natural)rx) {
+        return true;
+      }
     }
   }
   /* VM_INHERIT_SHARE: fork must keep the RX alias.  INHERIT_NONE left

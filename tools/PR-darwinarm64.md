@@ -25,9 +25,14 @@ stability, ObjC bridge, and throw/uwp parity for callbacks.
   still cold-load faults in `%FIND-PKG` — open).
 - `compile-file` emits heap code-vectors (MAP_JIT is interactive-only): MAP_JIT
   uvectors are outside the lisp heap and do not fasl-dump.
-- First native `rebuild-ccl :full t` compile still UDF-faults mid-sequence
-  (seen at `acode-rewrite`) — use `./tools/rebuild-darwinarm64-unbiased.sh`
-  until that is fixed.
+- Host ensure: heap-install tip `arm64-lap` (MAP_JIT uvectors do not
+  fasl-dump / used to UDF when tip LAP lived wrongly), then restore MAP_JIT
+  alloc + `%enable-darwinarm64-map-jit-fasls` so `compile-ccl` loads fasls
+  into MAP_JIT (no NX tax). Verified: wiped `(compile-ccl t)` ~23s, no UDF.
+- Historical UDF (`insn 0x00000000` at `0x306…`): NX redirect into a
+  **zeroed** `HEAP_EXEC_BIAS` RX alias while calling `ARM64-LAP-GENERATE-CODE`
+  on the impure heap — not the MAP_JIT arena. Remap probe now requires the
+  first word at bias to match canonical before skipping `mach_vm_remap`.
 
 ### Verification
 - Surgical: `tools/darwin-open-issues-smoke.lisp`, `tools/throwing-cleanup-smoke.lisp`
