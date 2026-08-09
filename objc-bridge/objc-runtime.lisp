@@ -3344,14 +3344,16 @@ safe-get-ptr'd the payload address (not a real isa) and recognize failed
                                ,@body))))
               (setq body `((flet ((call-next-method (&rest args)
                                   (declare (dynamic-extent args))
-                                  (apply (function ,(if class-p
-                                                        '%call-next-objc-class-method
-                                                        '%call-next-objc-method))
-                                         ,self-name
-                                         (@class ,objc-class-name)
-                                         (@selector ,selector)
-                                         ',signature
-                                         args)))
+                                  ;; Arm64: do not APPLY into %call-next-*;
+                                  ;; pass the &rest list as one argument.
+                                  (,(if class-p
+                                      '%call-next-objc-class-method-apply
+                                      '%call-next-objc-method-apply)
+                                   ,self-name
+                                   (@class ,objc-class-name)
+                                   (@selector ,selector)
+                                   ',signature
+                                   args)))
                                  (declare (inline call-next-method))
                                  ,@body)))
               `(progn

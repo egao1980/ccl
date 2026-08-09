@@ -1,5 +1,6 @@
-;;;; Darwin/arm64: ObjC Lisp #/init + call-next-method smoke.
-;;;; Requires tip %throwing-through-cleanup-p + split-frame %call-next-objc-method.
+;;;; Darwin/arm64: ObjC Lisp #/init + call-next-method + BOOL CNM smoke.
+;;;; Requires tip %throwing-through-cleanup-p + heap objc_super +
+;;;; funcall-by-arity %call-next (no APPLY onto send-fn).
 ;;;;
 ;;;;   ./darm64cl --no-init --batch < tools/darwin-objc-call-next-smoke.lisp
 (in-package :ccl)
@@ -9,6 +10,7 @@
   (error "missing %throwing-through-cleanup-p"))
 
 (require "OBJC-SUPPORT")
+(load "ccl:tools;cnm-funcall-defs.lisp")
 
 ;; Compiled normal UWP must not look like a throw (propagate-throw false positive).
 (defun %cnm-smoke-uwp ()
@@ -21,26 +23,24 @@
 
 (defclass cnm-smoke (ns:ns-object) () (:metaclass ns:+ns-object))
 (objc:defmethod #/init ((self cnm-smoke))
-  (call-next-method))
+  (%call-next-objc-method-apply self (@class "CnmSmoke")
+                                 (@selector "init") '(:id) '()))
 
 (let ((o (make-instance 'cnm-smoke)))
   (format t "~&cnm-init => ~s~%" o)
   (unless (typep o 'cnm-smoke)
     (error "make-instance cnm-smoke => ~s" o)))
 
-;; Stock always-apply call-next-method against split-frame %call-next
-(defclass cnm-smoke-apply (ns:ns-object) () (:metaclass ns:+ns-object))
-(objc:defmethod #/init ((self cnm-smoke-apply))
-  (flet ((call-next-method (&rest args)
-           (declare (dynamic-extent args))
-           (apply #'%call-next-objc-method self (@class "CnmSmokeApply")
-                  (@selector "init") '(:id) args)))
-    (call-next-method)))
+(defclass cnm-smoke-bool0 (ns:ns-object) () (:metaclass ns:+ns-object))
+(objc:defmethod (#/okp :<BOOL>) ((self cnm-smoke-bool0)) t)
+(defclass cnm-smoke-bool1 (cnm-smoke-bool0) () (:metaclass ns:+ns-object))
+(objc:defmethod (#/okp :<BOOL>) ((self cnm-smoke-bool1))
+  (%call-next-objc-method-apply self (@class "CnmSmokeBool1")
+                                 (@selector "okp") '(:<BOOL>) '()))
 
-(let ((o (make-instance 'cnm-smoke-apply)))
-  (format t "~&cnm-apply-init => ~s~%" o)
-  (unless (typep o 'cnm-smoke-apply)
-    (error "make-instance cnm-smoke-apply => ~s" o)))
+(let ((r (#/okp (#/init (#/alloc cnm-smoke-bool1)))))
+  (format t "~&cnm-bool => ~s~%" r)
+  (unless (eq r t) (error "bool CNM => ~s" r)))
 
 (defclass cnm-smoke-void (ns:ns-object) () (:metaclass ns:+ns-object))
 (objc:defmethod (#/cnmPing :void) ((self cnm-smoke-void))

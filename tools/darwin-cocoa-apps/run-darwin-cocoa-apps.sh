@@ -22,5 +22,6 @@ echo ";; darwinarm64 cocoa mini-apps (timeout=${TIMEOUT}s)"
 "$SMOKE" "$TIMEOUT" "$DIR/06-menu-validate.lisp"
 "$SMOKE" "$TIMEOUT" "$DIR/07-event-loop-idle.lisp"
 "$SMOKE" "$TIMEOUT" "$DIR/08-menu-tracking.lisp"
+"$SMOKE" "$TIMEOUT" "$DIR/09-objc-cnm.lisp" 09-OBJC-CNM-OK
 
 echo "DARWIN-COCOA-APPS-OK"

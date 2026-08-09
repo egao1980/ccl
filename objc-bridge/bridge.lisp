@@ -943,12 +943,38 @@
                   (symbol-name name) args))))))
                                              
 
-;;; Arm64: rlet of :objc_super in a &rest frame is clobbered by apply's
-;;; stack traffic (super_class → garbage → objc_msgSendSuper hang/recurse
-;;; on #/init + call-next-method).  Keep the super struct on the heap.
-(defun %call-next-objc-method (self class selector sig &rest args)
-  (declare (dynamic-extent args))
-  (let* ((siginfo (objc-method-signature-info sig))
+;;; Arm64 call-next-method hazards (see tools/darwin-cocoa-apps/09-*):
+;;; 1) rlet of :objc_super in a &rest frame is clobbered by apply's stack
+;;;    traffic (super_class → garbage → objc_msgSendSuper hang/recurse on
+;;;    #/init).  Keep the super struct on the heap.
+;;; 2) (apply send-fn …) AND (apply #'%call-next-objc-method …) corrupt
+;;;    nested ff-call scalar returns (Lisp→Lisp :<BOOL> → coerce-from-bool
+;;;    garbage; IDE File-menu validateMenuItem: death).  Never APPLY onto
+;;;    the send function; the objc:defmethod flet must pass the &rest list
+;;;    as one argument (see objc-runtime.lisp).
+(defun %invoke-objc-send-function (function receiver selector args)
+  (let ((n (length args)))
+    (declare (fixnum n))
+    (case n
+      (0 (funcall function receiver selector))
+      (1 (funcall function receiver selector (car args)))
+      (2 (funcall function receiver selector (car args) (cadr args)))
+      (3 (funcall function receiver selector
+                  (car args) (cadr args) (caddr args)))
+      (4 (funcall function receiver selector
+                  (car args) (cadr args) (caddr args) (cadddr args)))
+      (5 (funcall function receiver selector
+                  (car args) (cadr args) (caddr args) (cadddr args)
+                  (nth 4 args)))
+      (6 (funcall function receiver selector
+                  (car args) (cadr args) (caddr args) (cadddr args)
+                  (nth 4 args) (nth 5 args)))
+      (t (error "%invoke-objc-send-function: ~d args not supported" n)))))
+
+(defun %call-next-objc-method-apply (self class selector sig args)
+  "ARGS is a list of message arguments (not &rest). Used by call-next-method."
+  (let* ((args (if (listp args) (copy-list args) (list args)))
+         (siginfo (objc-method-signature-info sig))
          (function (or (objc-method-signature-info-super-function siginfo)
                        (setf (objc-method-signature-info-super-function siginfo)
                              (%compile-send-function-for-signature sig t))))
@@ -960,13 +986,16 @@
                          #-(or apple-objc-2.0 cocotron-objc) (pref class :objc_class.super_class))))
     (unwind-protect
          (with-ns-exceptions-as-errors
-             (apply function s selector args))
+           (%invoke-objc-send-function function s selector args))
       (free s))))
 
+(defun %call-next-objc-method (self class selector sig &rest args)
+  (%call-next-objc-method-apply self class selector sig args))
 
-(defun %call-next-objc-class-method (self class selector sig &rest args)
-  (declare (dynamic-extent args))
-  (let* ((siginfo (objc-method-signature-info sig))
+
+(defun %call-next-objc-class-method-apply (self class selector sig args)
+  (let* ((args (if (listp args) (copy-list args) (list args)))
+         (siginfo (objc-method-signature-info sig))
          (function (or (objc-method-signature-info-super-function siginfo)
                        (setf (objc-method-signature-info-super-function siginfo)
                              (%compile-send-function-for-signature sig t))))
@@ -982,8 +1011,11 @@
                                :objc_class.super_class))))
     (unwind-protect
          (with-ns-exceptions-as-errors
-             (apply function s selector args))
+           (%invoke-objc-send-function function s selector args))
       (free s))))
+
+(defun %call-next-objc-class-method (self class selector sig &rest args)
+  (%call-next-objc-class-method-apply self class selector sig args))
 
 (defun postprocess-objc-message-info (message-info)
   (let* ((objc-name (objc-message-info-message-name message-info))
