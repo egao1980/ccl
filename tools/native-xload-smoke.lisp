@@ -10,9 +10,11 @@
         (arch::target-nil-value (backend-target-arch *host-backend*)))
 
 (load "ccl:compiler;ARM64;arm64-backend.lisp")
+(load "ccl:lib;misc.lisp")
 (load "ccl:lib;compile-ccl.lisp")
 ;; xarm64fasload requires XFASLOAD and registers *darwinarm64-xload-backend*
 (require "XARM64FASLOAD" "ccl:xdump;xarm64fasload")
+(load "ccl:xdump;xfasload.lisp")
 
 (ensure-darwinarm64-target-arch)
 (setq *arm64-backend* *darwinarm64-backend*
@@ -39,6 +41,7 @@
 
 (format t "~&;; native xload-level-0 :force~%")
 (force-output)
+(gc)
 (xload-level-0 :force)
 
 (unless (probe-file (standard-boot-image-name))

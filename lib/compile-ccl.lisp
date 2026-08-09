@@ -803,6 +803,7 @@ the lisp and run REBUILD-CCL again.")
                          (arch::target-nil-value
                           (backend-target-arch *host-backend*)))
                  (force-output)
+                 (gc)
                  (if force (xload-level-0 :force) (xload-level-0)))
                #-darwinarm64-target
                (if force (xload-level-0 :force) (xload-level-0)))

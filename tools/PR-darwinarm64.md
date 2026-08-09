@@ -56,4 +56,4 @@ Companion ccl-tests: https://github.com/egao1980/ccl-tests/pull/1
 - [ ] `./tools/rebuild-darwinarm64-unbiased.sh` → `DARWIN-ARM64-UNBIASED-REBUILD-OK`
 - [ ] Bare `(require "OBJC-SUPPORT")` — no Undefined `%THROW` warnings
 - [ ] Optional: ANSI + CCL tests on purified tip image
-- [ ] Native `(rebuild-ccl :full t)` end-to-end (blocked: acode-rewrite UDF)
+- [ ] Native `(rebuild-ccl :full t)` end-to-end (no Rosetta)

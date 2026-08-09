@@ -1954,7 +1954,9 @@
   (let* ((*target-backend* (or (find-backend target)
                                (error "Unknown backend: ~s" target)))
          (*xload-target-backend* (or (find-xload-backend target)
-				     *xload-default-backend*))
+                                     (and (boundp '*xload-default-backend*)
+                                          *xload-default-backend*)
+                                     (error "No xload backend for ~s" target)))
 	 (*xload-startup-file* (backend-xload-info-default-startup-file-name
 				*xload-target-backend*)))
     (in-development-mode
