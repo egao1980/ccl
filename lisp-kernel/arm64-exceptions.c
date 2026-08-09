@@ -1285,17 +1285,41 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
 #if defined(DARWIN) && defined(ARM64)
   /* Dual-map / HEAP_EXEC_BIAS retired: dynamic heap is never executable.
      Executable code is MAP_JIT (darwin_arm64_code_*) or AREA_READONLY.
-     An NX fetch into IMAGE_BASE heap is a hard bug. */
+
+     Stock ports dirty AREA_READONLY with UnProtect→RWX (page stays
+     executable).  Darwin W^X forbids RWX, so we oscillate:
+       write fault  → mprotect RW (store retries)
+       NX fetch     → mprotect RX (insn retries)
+     Same page may flip again on a later store.  NX into the RW *dynamic*
+     heap (not readonly, not MAP_JIT) remains a hard bug. */
   if (xp) {
     natural esr = (natural)UC_MCONTEXT(xp)->__es.__esr;
     unsigned ec = (unsigned)((esr >> 26) & 0x3f);
     natural pcval = (natural)xpPC(xp);
     natural far = (natural)addr;
     Boolean insn_abort = (ec == 0x20 || ec == 0x21);
+    Boolean in_readonly =
+      readonly_area &&
+      pcval >= (natural)readonly_area->low &&
+      pcval < (natural)readonly_area->active;
+
+    if (insn_abort && pcval == far && in_readonly) {
+      LogicalAddress page =
+        (LogicalAddress)truncate_to_power_of_2(pcval, log2_page_size);
+      if (mprotect(page, page_size, PROT_READ | PROT_EXEC) == 0) {
+        return 0;
+      }
+      fprintf(dbgout,
+              "\nFATAL: mprotect(RX) failed for AREA_READONLY page 0x%lx errno=%d\n",
+              (unsigned long)(natural)page, errno);
+      cold_load_dump_frame(xp);
+      _exit(157);
+    }
 
     if (insn_abort &&
         pcval == far &&
         pcval >= (natural)IMAGE_BASE_ADDRESS &&
+        !in_readonly &&
         !darwin_arm64_in_code_heap((void *)pcval)) {
       fprintf(dbgout,
               "\nFATAL: NX fetch into non-code heap at 0x%lx\n",
@@ -1316,6 +1340,7 @@ handle_protection_violation(ExceptionInformation *xp, siginfo_t *info, TCR *tcr,
     } else {
       if ((addr >= readonly_area->low) &&
           (addr < readonly_area->active)) {
+        /* Darwin: RW only (see UnProtectMemory).  NX restore is above. */
         UnProtectMemory((LogicalAddress)(truncate_to_power_of_2(addr,log2_page_size)),
                         page_size);
         return 0;
