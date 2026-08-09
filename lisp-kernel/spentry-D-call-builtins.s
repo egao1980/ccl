@@ -111,7 +111,7 @@
         ldr fname, [fname, #(misc_data_offset + (\idx) * node_size)]
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 .endm
 
 /* ========== BASIC CALL/JUMP OPERATIONS ========== */
@@ -120,13 +120,13 @@
 spentry jmpsym
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp jmpsym
 
 /* ported from ppc-spentry.s:47-48 (PPC64 branch: jump_nfn macro) */
 spentry jmpnfn
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp jmpnfn
 
 /* ported from ppc-spentry.s:51-52 (PPC64 branch: do_funcall macro,
@@ -150,12 +150,12 @@ spentry funcall
         b.ne 3f
         mov nfn, temp0
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 2:      /* symbol: call its function cell (unchecked slot-0 jump) */
         mov fname, temp0
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 3:      /* ppc-macros.s do_funcall: uuo_interr(error_cant_call, temp0) */
         uuo_error_reg_not_callable temp0 /* his macro name */
 endsp funcall
@@ -504,7 +504,7 @@ spentry ksignalerr
         ref_nrs_symbol fname, errdisp   /* ppc:2021 li fname,nrs.errdisp   */
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp ksignalerr
 
 /* ========== CLOSURE CALLS ========== */
@@ -605,7 +605,7 @@ spentry call_closure
 .Lcc_go:
         ldr nfn, [nfn, #(misc_data_offset + node_size)] /* ppc:2163 slot 1 */
         ldr temp0, [nfn, #_function.codevector]         /* ppc:2164        */
-        br temp0                            /* ppc:2165-2166 mtctr+bctr    */
+        br_codevector temp0                            /* ppc:2165-2166 mtctr+bctr    */
 endsp call_closure
 
 /* ========== INTEGER/NATURAL CONVERSION ========== */
@@ -732,13 +732,13 @@ spentry tcallsymgen
         /* Jump to fname */
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 
 2:      ldr vsp, [sp, #lisp_frame.savevsp]
         add sp, sp, #lisp_frame.size
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp tcallsymgen
 
 /* ported from ppc-spentry.s:2341-2356 (PPC64 branch) */
@@ -759,14 +759,14 @@ spentry tcallsymslide
         mov vsp, imm0
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp tcallsymslide
 
 /* ported from ppc-spentry.s:2369-2372 (PPC64 branch) */
 spentry tcallnfngen
         /* Tail call nfn - general */
         cmp nargs, #(nargregs << fixnumshift)
-        b.le _SPtcallnfnvsp
+        bcond_ext le, _SPtcallnfnvsp
         b _SPtcallnfnslide
 endsp tcallnfngen
 
@@ -786,7 +786,7 @@ spentry tcallnfnslide
         b.ne 1b
         mov vsp, imm0
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp tcallnfnslide
 
 /* ========== BUILTIN ARITHMETIC ========== */
@@ -1182,7 +1182,7 @@ spentry callbuiltin
         ldr fname, [fname, imm0]
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp callbuiltin
 
 /* ported from ppc-spentry.s:5280-5285 (PPC64 branch) */
@@ -1194,7 +1194,7 @@ spentry callbuiltin0
         ldr fname, [fname, imm0]
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp callbuiltin0
 
 /* ported from ppc-spentry.s:5287-5292 (PPC64 branch) */
@@ -1206,7 +1206,7 @@ spentry callbuiltin1
         ldr fname, [fname, imm0]
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp callbuiltin1
 
 /* ported from ppc-spentry.s:5294-5299 (PPC64 branch) */
@@ -1218,7 +1218,7 @@ spentry callbuiltin2
         ldr fname, [fname, imm0]
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp callbuiltin2
 
 /* ported from ppc-spentry.s:5302-5307 (PPC64 branch) */
@@ -1230,7 +1230,7 @@ spentry callbuiltin3
         ldr fname, [fname, imm0]
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp callbuiltin3
 
 /* ========== FRAME RESTORE ========== */
@@ -1415,7 +1415,7 @@ ash_shift64:
          * PPC branches on cr0.eq from cntlzd. -- this reflects whether
          * original value was negative. */
         cmp imm0, #0
-        b.lt _SPmakes128
+        bcond_ext lt, _SPmakes128
         b _SPmakeu128
 9:
         /* ppc:5990 */
@@ -1481,7 +1481,7 @@ spentry builtin_aref1
         cmp imm0, #subtag_simple_vector
         /* ppc:3216 box_fixnum(arg_x,imm0) -- save typecode for subtag_misc_ref */
         lsl arg_x, imm0, #fixnumshift
-        b.eq _SPsubtag_misc_ref         /* ppc:3217 */
+        bcond_ext eq, _SPsubtag_misc_ref         /* ppc:3217 */
         /* ppc:3218 ivector_typecode_p(imm1,imm0,imm2) (ppc-macros.s:747):
            ONLY immediate-header subtags are CL ivectors; the macro zeroes a
            node-header subtag so the following compare fails.  We must do the
@@ -1495,7 +1495,7 @@ spentry builtin_aref1
         cmp imm1, #tag_nodeheader
         b.eq 1f
         cmp imm0, #min_cl_ivector_subtag  /* ppc:3219-3220 */
-        b.ge _SPsubtag_misc_ref
+        bcond_ext ge, _SPsubtag_misc_ref
 1:      jump_builtin _builtin_aref1, 2  /* ppc:3221 */
 endsp builtin_aref1
 
@@ -1512,7 +1512,7 @@ spentry builtin_aset1
         cmp imm0, #subtag_simple_vector
         /* ppc:6033 box_fixnum(temp0,imm0) -- subtag_misc_set wants boxed typecode */
         lsl temp0, imm0, #fixnumshift
-        b.eq _SPsubtag_misc_set         /* ppc:6034 */
+        bcond_ext eq, _SPsubtag_misc_set         /* ppc:6034 */
         /* ppc:6035-6037 ivector_typecode_p + compare.  Exclude node-headers
            (vectorH/arrayH) before the >= test — see builtin_aref1 for the
            tag-scheme rationale (raw compare would treat a complex array as an
@@ -1521,7 +1521,7 @@ spentry builtin_aset1
         cmp imm1, #tag_nodeheader
         b.eq 1f
         cmp imm0, #min_cl_ivector_subtag
-        b.ge _SPsubtag_misc_set
+        bcond_ext ge, _SPsubtag_misc_set
 1:      jump_builtin _builtin_aset1, 3  /* ppc:6038 */
 endsp builtin_aset1
 
@@ -1643,7 +1643,7 @@ spentry mvpasssym
         /* ppc:6898 jump_fname() */
         ldr nfn, [fname, #symbol.fcell]
         ldr temp0, [nfn, #_function.codevector]
-        br temp0
+        br_codevector temp0
 endsp mvpasssym
 
 /* NOTES */

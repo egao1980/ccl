@@ -255,7 +255,7 @@ spentry ffcall
         cmp imm2, #fulltag_misc
         b.ne 8f
         ldurb w2, [arg_z, #misc_subtag_offset]
-        cmp imm2, #subtag_macptr
+        cmp w2, #subtag_macptr          /* was imm2 — never compared the subtag */
         b.ne 8f
         ldur temp4, [arg_z, #macptr.address]
         b 9f
@@ -273,30 +273,44 @@ spentry ffcall
         ldp x2, x3, [sp, #(c_frame.params + 2*node_size)]
         ldp x4, x5, [sp, #(c_frame.params + 4*node_size)]
         ldp x6, x7, [sp, #(c_frame.params + 6*node_size)]
-        /* AAPCS64, no stack args (<=8 GPR/<=8 FP, enforced loud in the
-         * w13 codegen): keep SP at the frame head -- the callee's stack
-         * grows BELOW its incoming SP, so popping the frame here hands
-         * the saved lr/backlink to the callee as scratch (16m5c crash:
-         * return jumped into the c_frame).  Stack-arg layout = ratify
-         * item (frame head must move above the param area). */
-        /* Record the lisp<->foreign boundary for the GC (16m41; protocol note
-         * in spentry-E-ffi.s).  The walk must start at the c_frame base: word
-         * 0 there is the frame's own ivector header, whose (already shrunk)
-         * count strides exactly onto the boundary lisp_frame built above.
-         * Park the enclosing boundary in param word 0 -- dead now that the
-         * args are loaded, INSIDE the c_frame ivector so the GC never scans
-         * it, and above SP so the callee cannot touch it.
+        /* Stack args (GPR 9+): leave SP at c_frame.params+8*node_size so
+         * overflow words are at the callee's incoming SP.  Callee frames
+         * grow BELOW that SP and will clobber header/savedsp/GP save --
+         * so park restore state on the vstack (never re-read the c_frame
+         * after return).  After shrink, element count == 9 means
+         * savedsp+8 GP only (no overflow/FP staging); count > 9 means
+         * there is at least one word above the GP save (overflow and/or
+         * dead FP staging).  Bumping when only FP staging remains is
+         * harmless: callees with no stack args never read [SP+0].
          *
-         * ORDER MATTERS, and it is why the arg loads moved above the valence
-         * store: the boundary must be in place BEFORE this thread advertises
-         * foreign valence, or a GC in the window reads a stale boundary and
-         * walks the wrong region (ARM-family ff-call stores it first for the
-         * same reason).  temp0 is scratch: the return path re-nils every temp,
-         * and it is not an AAPCS64 argument register the way imm0 is. */
+         * When bumping, last_lisp_frame must be the boundary lisp_frame
+         * (above the new SP), not the c_frame base -- the header at the
+         * base is callee scratch.  No-bump keeps the historical
+         * last_lisp_frame = c_frame base (header strides onto the
+         * lisp_frame).  Enclosing boundary / savedsp / lr are always
+         * vstack-parked so both paths share one return sequence.
+         *
+         * MUST use temp* here, never imm*: immN aliases xN and the
+         * outgoing GPR args are already live in x0-x7. */
+        ldr temp0, [save3, #c_frame.header]
+        lsr temp1, temp0, #num_subtag_bits      /* count after shrink */
+        add temp2, temp1, #1
+        add temp2, save3, temp2, lsl #node_shift /* boundary lisp_frame */
         ldr temp0, [rcontext, #tcr.last_lisp_frame]
-        str temp0, [sp, #c_frame.params]
-        mov temp0, sp
-        str temp0, [rcontext, #tcr.last_lisp_frame]
+        str temp0, [vsp, #-node_size]!          /* enclosing boundary */
+        ldr temp0, [save3, #c_frame.savedsp]
+        str temp0, [vsp, #-node_size]!          /* caller SP */
+        ldr temp0, [temp2, #lisp_frame.savelr]
+        str temp0, [vsp, #-node_size]!          /* return lr */
+        str vsp, [temp2, #lisp_frame.savevsp]
+        str vsp, [rcontext, #tcr.save_vsp]
+        cmp temp1, #9
+        b.le 1f
+        add sp, save3, #(c_frame.params + 8*node_size)
+        mov temp0, temp2                        /* lisp_frame = GC boundary */
+        b 2f
+1:      mov temp0, save3                        /* c_frame base = GC boundary */
+2:      str temp0, [rcontext, #tcr.last_lisp_frame]
         mov temp0, #TCR_STATE_FOREIGN
         str temp0, [rcontext, #tcr.valence]
         /* Open the capture window: discard lisp-side cumulative flags so
@@ -313,22 +327,10 @@ spentry ffcall
         /* A GC may have run while we were foreign. */
         ldr allocptr, [rcontext, #tcr.save_allocptr]
         ldr allocbase, [rcontext, #tcr.save_allocbase]
-        /* Recover lr from the boundary lisp_frame and sp from the SAVED SP
-         * word -- not from offset 0, which is the header (16m30, see the
-         * entry note).  The count has already been shrunk by 4, so
-         * reserved_base = save3 + node_size*(count + 1).  x0/d0 hold the
-         * results: imm1/imm2 only, never imm0.
-         * SUBPRIM-POPS is the w13 contract: the caller's epilogue runs with
-         * sp back at its own lisp frame (confirmed against the emitted
-         * MAKE-GCABLE-MACPTR epilogue, which pops a 32-byte frame at sp). */
-        ldr imm1, [save3, #c_frame.header]
-        lsr imm1, imm1, #num_subtag_bits
-        add imm1, imm1, #1
-        add imm2, save3, imm1, lsl #node_shift
-        ldr lr, [imm2, #lisp_frame.savelr]
-        ldr imm1, [save3, #c_frame.savedsp]
-        /* Hand the enclosing foreign boundary back BEFORE sp moves (16m41). */
-        ldr imm2, [save3, #c_frame.params]
+        /* Restore from vstack parks (c_frame may be callee trash). */
+        ldr lr, [vsp], #node_size
+        ldr imm1, [vsp], #node_size             /* savedsp */
+        ldr imm2, [vsp], #node_size             /* enclosing boundary */
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
         ldr save3, [vsp], #node_size
