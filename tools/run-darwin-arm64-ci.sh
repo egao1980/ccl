@@ -10,7 +10,7 @@ TIMEOUT="${CCL_SMOKE_TIMEOUT:-90}"
 
 echo ";; darwinarm64 CI smokes (timeout=${TIMEOUT}s)"
 "$SMOKE" "$TIMEOUT" tools/darwin-math-smoke.lisp
-"$SMOKE" "$TIMEOUT" tools/darwin-purify-smoke.lisp
+./tools/run-darwin-purify-smoke.sh
 "$SMOKE" "$TIMEOUT" tools/darwin-cocoa-smoke.lisp
 "$SMOKE" "$TIMEOUT" tools/darwin-interp-ff-call-smoke.lisp
 "$SMOKE" "$TIMEOUT" tools/darwin-clean-build-smoke.lisp
