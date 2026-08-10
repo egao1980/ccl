@@ -28,7 +28,9 @@
 (dolist (f '("cocoa-ide/fasls/cocoa-editor.da64fsl"
              "cocoa-ide/fasls/cocoa-listener.da64fsl"
              "cocoa-ide/fasls/xapropos.da64fsl"
-             "cocoa-ide/fasls/hemlock-text.da64fsl"))
+             "cocoa-ide/fasls/hemlock-text.da64fsl"
+             "cocoa-ide/fasls/file-dialogs.da64fsl"
+             "cocoa-ide/fasls/search-files.da64fsl"))
   (when (probe-file f)
     (delete-file f)
     (format t "~&;; deleted ~s~%" f)))
