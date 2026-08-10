@@ -100,7 +100,9 @@
       (error "cocoa-ide class missing after load-ide"))
     (format t "~&;; application-class ~s~%" ide-class)
     (force-output)
-    ;; Does not return on success.
+    ;; Does not return on success.  :purify t is OK for GUI .app launch;
+    ;; --batch --eval smoke against a cocoa-ide image is not (Initial runs
+    ;; IDE toplevel and fights the eval).
     (save-application tmp
                       :application-class ide-class
                       :purify t)))
