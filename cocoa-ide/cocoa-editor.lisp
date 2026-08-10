@@ -1666,20 +1666,31 @@
 
 (objc:defmethod (#/drawRect: :void) ((self modeline-view) (rect :<NSR>ect))
   (declare (ignorable rect))
-  (let* ((bounds (#/bounds self))
-         (context (#/currentContext ns:ns-graphics-context))
-         (w (float (ns:ns-rect-width bounds) 1.0d0))
-         (h (float (ns:ns-rect-height bounds) 1.0d0))
-         (top (ns:make-ns-rect 0.0d0 0.0d0 w 0.5d0))
-         (bot (ns:make-ns-rect 0.0d0 (- h 0.5d0) w 0.5d0)))
-    (#/saveGraphicsState context)
-    (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.9d0 1.0d0))
-    (#_NSRectFill bounds)
-    (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.3333d0 1.0d0))
-    (#_NSRectFill top)
-    (#_NSRectFill bot)
-    (draw-modeline-string self)
-    (#/restoreGraphicsState context)))
+  ;; Never throw into AppKit from drawRect.  On darwinarm64 a bad NSRect
+  ;; from #/bounds makes ns-rect-width look like a BOGUS lisp object, then
+  ;; (float …) signals "not of the expected type REAL" and Hemlock surfaces
+  ;; it as "Error in Hemlock command processing" (redisplay runs inside the
+  ;; command's handler-bind).
+  (ignore-errors
+    (let* ((bounds (#/bounds self))
+           (context (#/currentContext ns:ns-graphics-context))
+           (w (ignore-errors
+                (let ((x (ns:ns-rect-width bounds)))
+                  (and (realp x) (float x 1.0d0)))))
+           (h (ignore-errors
+                (let ((x (ns:ns-rect-height bounds)))
+                  (and (realp x) (float x 1.0d0))))))
+      (#/saveGraphicsState context)
+      (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.9d0 1.0d0))
+      (#_NSRectFill bounds)
+      (when (and w h)
+        (let ((top (ns:make-ns-rect 0.0d0 0.0d0 w 0.5d0))
+              (bot (ns:make-ns-rect 0.0d0 (- h 0.5d0) w 0.5d0)))
+          (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.3333d0 1.0d0))
+          (#_NSRectFill top)
+          (#_NSRectFill bot)))
+      (draw-modeline-string self)
+      (#/restoreGraphicsState context))))
 
 ;;; Hook things up so that the modeline is updated whenever certain buffer
 ;;; attributes change.
