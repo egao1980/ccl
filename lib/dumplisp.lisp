@@ -114,6 +114,7 @@
   (let* ((ip *initial-process*)
 	 (cp *current-process*))
     (when (process-verify-quit ip)
+      #+darwinarm64-target
       (let* ((fd (open-dumplisp-file filename
                                      :mode mode
                                      :prepend-kernel prepend-kernel
@@ -124,18 +125,48 @@
           #-(or darwinx8632-target darwinx8664-target)
           (progn
             (warn "native image support not available, ignoring ~s option." :native)))
-            
-        (process-interrupt ip
-                           #'(lambda ()
-                               (process-exit-application
-                                *current-process*
-                                #'(lambda ()
-                                    (apply #'%save-application-internal
-                                           fd
-                                           :purify purify
-                                           rest))))))
-      (unless (eq cp ip)
-	(process-kill cp)))))
+        ;; Interrupting *initial-process* (often stuck in nanosleep via
+        ;; housekeeping) never runs the dump thunk here, so
+        ;; open-dumplisp-file's truncated image is left at 0 bytes and
+        ;; the caller hangs.  Dump on the current process instead —
+        ;; %save-application-internal → save-image → toplevel works from
+        ;; the TTY listener.  process-exit-application is a no-op unless
+        ;; *current-process* is *initial-process*.
+        (if (eq cp ip)
+          (process-exit-application
+           cp
+           #'(lambda ()
+               (apply #'%save-application-internal
+                      fd
+                      :purify purify
+                      rest)))
+          (apply #'%save-application-internal
+                 fd
+                 :purify purify
+                 rest)))
+      #-darwinarm64-target
+      (progn
+        (let* ((fd (open-dumplisp-file filename
+                                       :mode mode
+                                       :prepend-kernel prepend-kernel
+                                       #+windows-target  #+windows-target 
+                                       :application-type application-type)))
+          (when native
+            #+(or darwinx8632-target darwinx8664-target) (setq fd (- fd))
+            #-(or darwinx8632-target darwinx8664-target)
+            (progn
+              (warn "native image support not available, ignoring ~s option." :native)))
+          (process-interrupt ip
+                             #'(lambda ()
+                                 (process-exit-application
+                                  *current-process*
+                                  #'(lambda ()
+                                      (apply #'%save-application-internal
+                                             fd
+                                             :purify purify
+                                             rest))))))
+        (unless (eq cp ip)
+          (process-kill cp))))))
 
 (defun %save-application-internal (fd &key
                                       toplevel-function ;???? 
