@@ -94,7 +94,13 @@
     (%darwinarm64-register-code-heap))
   (format t "~&;; save-application → ~s (purify t)~%" tmp)
   (force-output)
-  ;; Does not return on success.
-  (save-application tmp
-                    :application-class 'cocoa-ide
-                    :purify t))
+  (let ((ide-class (or (find-class 'gui::cocoa-ide nil)
+                       (find-class 'cocoa-ide nil))))
+    (unless ide-class
+      (error "cocoa-ide class missing after load-ide"))
+    (format t "~&;; application-class ~s~%" ide-class)
+    (force-output)
+    ;; Does not return on success.
+    (save-application tmp
+                      :application-class ide-class
+                      :purify t)))
