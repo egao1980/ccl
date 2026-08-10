@@ -1,5 +1,6 @@
-;;;; Recompile cocoa-editor (stream-concat modeline join) and prove Listener
-;;;; #/display stays alive with draw-modeline-string enabled.
+;;;; Install fixed modeline string draw (stream-concat join + drawAtPoint) and
+;;;; prove Listener #/display stays alive. Avoid full cocoa-editor reload
+;;;; (class_addIvar); load tools/ide-modeline-stream-concat-patch.lisp instead.
 ;;;;   ./tools/run-darwin-ide-smoke.sh 120 tools/ide-modeline-stream-concat-alive.lisp \\
 ;;;;     IDE-MODELINE-STREAM-CONCAT-ALIVE-OK
 (in-package :ccl)
@@ -26,27 +27,12 @@
 (require "COCOA")
 (%p "finished=~s" (timed-wait-on-semaphore gui::*cocoa-ide-finished-launching* 60))
 
-;; Neutralize any poisoned tip fasl drawRect before recompile/load.
-(eval
- '(objc:defmethod (#/drawRect: :void) ((self gui::modeline-view) (rect :<NSR>ect))
-    (declare (ignorable rect))
-    (let* ((bounds (#/bounds self))
-           (context (#/currentContext ns:ns-graphics-context)))
-      (#/saveGraphicsState context)
-      (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.9d0 1.0d0))
-      (#_NSRectFill bounds)
-      (#/restoreGraphicsState context))))
-(%p "drawRect neutralized")
-
-(%p "compile+load cocoa-editor…")
+(%p "load stream-concat patch…")
 (handler-case
     (progn
-      (compile-file "ccl:cocoa-ide;cocoa-editor.lisp"
-                    :output-file "ccl:cocoa-ide;fasls;cocoa-editor"
-                    :verbose t :print nil)
-      (load "ccl:cocoa-ide;fasls;cocoa-editor")
-      (%p "cocoa-editor loaded"))
-  (error (c) (%p "compile/load ERR ~a" c) (force-output) (#_exit 1)))
+      (load (merge-pathnames "tools/ide-modeline-stream-concat-patch.lisp" (ccl-directory)))
+      (%p "patched"))
+  (error (c) (%p "patch ERR ~a" c) (force-output) (#_exit 1)))
 
 (let ((ok 0) (fail 0))
   (%p "ensure+display")
