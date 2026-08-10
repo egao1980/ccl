@@ -1632,23 +1632,24 @@
 ;;; early in the loading sequence confuses some Carbon libraries that're
 ;;; used in the event dispatch mechanism.
 ;;;
-;;; Darwin/arm64: avoid WITH-SLOTS on foreign ObjC slots.  make-ns-point /
-;;; drawAtPoint:withAttributes: still fault in #/drawRect: callbacks
-;;; (CLASS-CELL-TYPEP @ #x30000000015BF4); keep the string path unused
-;;; until that HFA/send path is fixed.  Border rects must use make-ns-rect
-;;; (with-ns-rect / mutating #/bounds temps wedge the event thread).
+;;; Darwin/arm64: avoid WITH-SLOTS on foreign ObjC slots.  Border rects must
+;;; use make-ns-rect (with-ns-rect / mutating #/bounds temps wedge the event
+;;; thread).  Do not join modeline fields with (apply #'concatenate …) inside
+;;; #/drawRect: — APPLY of &rest during an ObjC callback SIGBUSes on
+;;; darwinarm64 (mini-app 17 apply-concat vs stream-concat).  Build the
+;;; string via with-output-to-string instead.
 (defun draw-modeline-string (the-modeline-view)
   (let* ((text-attributes (modeline-text-attributes the-modeline-view))
          (buffer (buffer-for-modeline-view the-modeline-view)))
     (when (and buffer (not (%null-ptr-p text-attributes)))
       (let* ((string
-              (apply #'concatenate 'string
-                     (mapcar
-                      #'(lambda (field)
-                          (or (ignore-errors
-                                (funcall (hi::modeline-field-function field) buffer))
-                              ""))
-                      (hi::buffer-modeline-fields buffer)))))
+              (with-output-to-string (out)
+                (dolist (field (hi::buffer-modeline-fields buffer))
+                  (write-string
+                   (or (ignore-errors
+                         (funcall (hi::modeline-field-function field) buffer))
+                       "")
+                   out)))))
         (#/drawAtPoint:withAttributes: (#/autorelease (%make-nsstring string))
                                        (ns:make-ns-point 5.0d0 1.0d0)
                                        text-attributes)))))
@@ -1667,7 +1668,7 @@
     (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.3333d0 1.0d0))
     (#_NSRectFill top)
     (#_NSRectFill bot)
-    ;; (draw-modeline-string self) — deferred; see comment above.
+    (draw-modeline-string self)
     (#/restoreGraphicsState context)))
 
 ;;; Hook things up so that the modeline is updated whenever certain buffer
