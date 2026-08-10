@@ -326,21 +326,24 @@
 ;;; Darwin/arm64: log CLASS-OF failures before signaling.  The Hemlock sheet
 ;;; often IS no-class-error; without a frame-only BT we cannot fix the root.
 (defvar *%original-no-class-error* nil)
+(defvar *%logging-no-class-error* nil)
 (defun %install-no-class-error-logger ()
   (unless *%original-no-class-error*
     (setq *%original-no-class-error* (fdefinition 'ccl::no-class-error))
     (setf (fdefinition 'ccl::no-class-error)
           (lambda (x)
-            (ignore-errors
-              (with-open-file (s "/tmp/ccl-no-class-error.log" :direction :output
-                                 :if-exists :append :if-does-not-exist :create)
-                (format s "~&==== ~a id=~a ====~%"
-                        (get-universal-time) (%safe-object-id x))
-                (let ((*debug-io* s) (*standard-output* s))
-                  (ignore-errors
-                    (ccl:print-call-history :count 60 :detailed-p nil)))
-                (terpri s)
-                (force-output s)))
+            (unless *%logging-no-class-error*
+              (let ((*%logging-no-class-error* t))
+                (ignore-errors
+                  (with-open-file (s "/tmp/ccl-no-class-error.log" :direction :output
+                                     :if-exists :append :if-does-not-exist :create)
+                    (format s "~&==== ~a id=~a ====~%"
+                            (get-universal-time) (%safe-object-id x))
+                    (let ((*debug-io* s) (*standard-output* s))
+                      (ignore-errors
+                        (ccl:print-call-history :count 60 :detailed-p nil)))
+                    (terpri s)
+                    (force-output s)))))
             ;; Re-signal with a BOGUS-safe message (avoid ~s on the datum in
             ;; case write-internal/class-of recurses on some corrupt headers).
             (error "Bug (probably): can't determine class of object ~a"
