@@ -15,13 +15,49 @@
 
 (use-interface-dir :cocoa)
 
-;; Tip generators (image may still have the all-stret version).
+;; Tip inbound generators (image may still have the all-stret version).
 (load (merge-pathnames "lib/ffi-linuxarm64.lisp" (ccl-directory)))
 (load (merge-pathnames "lib/ffi-darwinarm64.lisp" (ccl-directory)))
 (setf (ftd-callback-bindings-function *target-ftd*)
       #'arm64-darwin::generate-callback-bindings)
 (setf (ftd-callback-return-value-function *target-ftd*)
       #'arm64-darwin::generate-callback-return-value)
+
+;; Tip outbound expand-ff-call so the Lisp→callback round-trip uses
+;; :registers (matches AppKit).  Image may still expand NSRange as stret.
+(let* ((wanted '(arm64::hfa-leaf-reps arm64::record-hfa-info
+                 arm64::classify-record-return
+                 arm64::record-type-returns-structure-as-first-arg
+                 arm64::struct-from-regbuf-values
+                 arm64::expand-ff-call))
+       (forms ()))
+  (with-open-file (s (merge-pathnames "compiler/ARM64/arm64-backend.lisp"
+                                      (ccl-directory)))
+    (loop for f = (read s nil s)
+          until (eq f s)
+          when (and (consp f) (eq (car f) 'defun)
+                    (member (cadr f) wanted :test #'eq))
+          do (push f forms)))
+  (dolist (f (nreverse forms)) (eval f))
+  (setf (ftd-ff-call-expand-function *target-ftd*)
+        #'arm64-darwin::expand-ff-call)
+  (setf (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*)
+        #'arm64-darwin::record-type-returns-structure-as-first-arg)
+  (format t "~&;; outbound helpers ~d~%" (length forms))
+  (finish-output))
+
+;; Interpreted %ff-call must understand :registers.
+(let* ((src (merge-pathnames "level-0/ARM64/arm64-def.lisp" (ccl-directory)))
+       (form nil))
+  (with-open-file (s src)
+    (loop for f = (read s nil s)
+          until (eq f s)
+          when (and (consp f) (eq (car f) 'defun) (eq (cadr f) '%ff-call))
+          do (setq form f)))
+  (when form
+    (let ((*warn-if-redefine-kernel* nil)) (eval form))
+    (format t "~&;; %ff-call reloaded~%")
+    (finish-output)))
 
 (assert (eq (arm64::classify-record-return (parse-foreign-type :<NSR>ange)) :gpr))
 (assert (eq (arm64::classify-record-return (parse-foreign-type :<NSR>ect)) :hfa))
@@ -47,17 +83,21 @@
   (finish-output))
 
 ;; Live round-trip: Lisp→C ABI→callback→registers→Lisp.
+;; defcallback struct-return path does (let* ((result ,@body)) — one form.
 (defcallback %smoke-make-nsrange
     (out :unsigned-long loc :unsigned-long len :<NSR>ange)
-  (setf (pref out :<NSR>ange.location) loc
-        (pref out :<NSR>ange.length) len)
-  out)
+  (progn
+    (setf (pref out :<NSR>ange.location) loc
+          (pref out :<NSR>ange.length) len)
+    out))
 
 (rlet ((got :<NSR>ange))
+  ;; Struct-return ff-call args: RESULT-BUF …args… RESULT-TYPE
   (ff-call %smoke-make-nsrange
+           got
            :unsigned-long 42
            :unsigned-long 7
-           :<NSR>ange got)
+           :<NSR>ange)
   (assert (= (pref got :<NSR>ange.location) 42))
   (assert (= (pref got :<NSR>ange.length) 7))
   (format t "~&;; NSRange callback round-trip ok (~d,~d)~%"
@@ -67,17 +107,19 @@
 
 (defcallback %smoke-make-nsrect
     (out :double x :double y :double w :double h :<NSR>ect)
-  (setf (pref out :<NSR>ect.origin.x) x
-        (pref out :<NSR>ect.origin.y) y
-        (pref out :<NSR>ect.size.width) w
-        (pref out :<NSR>ect.size.height) h)
-  out)
+  (progn
+    (setf (pref out :<NSR>ect.origin.x) x
+          (pref out :<NSR>ect.origin.y) y
+          (pref out :<NSR>ect.size.width) w
+          (pref out :<NSR>ect.size.height) h)
+    out))
 
 (rlet ((got :<NSR>ect))
   (ff-call %smoke-make-nsrect
+           got
            :double 1.0d0 :double 2.0d0
            :double 3.0d0 :double 4.0d0
-           :<NSR>ect got)
+           :<NSR>ect)
   (assert (= (pref got :<NSR>ect.origin.x) 1.0d0))
   (assert (= (pref got :<NSR>ect.origin.y) 2.0d0))
   (assert (= (pref got :<NSR>ect.size.width) 3.0d0))
