@@ -397,19 +397,15 @@ endsp callbackX
  * and into which it writes the C result.
  *
  * PROPOSED-CONVENTION CALLBACK-IDX (RATIFY): the make-callback trampoline
- * stub enters here with the UNBOXED callback index in arg_w=x8 (16m14:
- * fixed a =x9 typo here — the code below reads arg_w, which is x8; the
- * level-1/arm64-callback-support.lisp generator stamps x8) (PPC uses
- * r11; any AAPCS64 caller-saved scratch works - the trampoline generator
- * is a lisp-side deliverable that must match).
+ * stub enters here with the UNBOXED callback index in x9 (arg_x).  x8
+ * (arg_w) is left alone so AAPCS64's indirect-result pointer survives;
+ * .SPcallback spills it at CBF-16.  (Older trampolines stamped x8 and
+ * destroyed sret — fixed with level-1/arm64-callback-support.lisp.)
  *
- * PROPOSED frame contract (RATIFY - lisp-side callback glue must match;
- * boot-validated shape from our v2 tree): x0..x7 are pushed so the x0 slot
- * abuts the incoming sp; CBF = &x0save.  The C caller's stack args then
- * sit contiguously at CBF+64 (the PowerOpen single-linear-offset property,
- * reproduced).  d0..d7 saves at CBF-64..-8.  The GPR result is reloaded
- * from CBF+0/+8, the FPR result from CBF-64.  CBF is 16-aligned, so it is
- * its own fixnum boxing.
+ * Frame contract (lisp-side callback glue must match arm64-arch.lisp
+ * callback-frame.*): x0..x7 pushed so the x0 slot abuts the incoming
+ * CBF; stack args at CBF+64; x8 sret at CBF-16; d0..d7 at CBF-80..-24.
+ * GPR result reloaded from CBF+0/+8, FPR from CBF-80.  CBF is 16-aligned.
  *
  * ARM64-DEVIATION (vs PPC64 poweropen_callback):
  *   - callee-saved set = x19-x28 + fp/lr and d8-d15 (+FPCR/FPSR pair), NOT
@@ -425,16 +421,19 @@ endsp callbackX
 spentry callback
         /* Save the C argument registers so the lisp glue can read them
            (ppc:5036-5043 stores r3-r10 into the caller frame; AAPCS64 has
-           no reserved param area, so push them - x0 slot lands at CBF). */
+           no reserved param area, so push them - x0 slot lands at CBF).
+           Entry: x8 = AAPCS64 sret (maybe), x9 = callback index. */
         stp x6, x7, [sp, #-16]!
         stp x4, x5, [sp, #-16]!
         stp x2, x3, [sp, #-16]!
         stp x0, x1, [sp, #-16]!
-        mov arg_x, sp                           /* arg_x=x10: CBF            */
+        mov x10, sp                             /* x10 = CBF (&x0)           */
+        /* Spill sret (x8) between GPR and FP blocks at CBF-16. */
+        stp x8, xzr, [sp, #-16]!
         stp d6, d7, [sp, #-16]!
         stp d4, d5, [sp, #-16]!
         stp d2, d3, [sp, #-16]!
-        stp d0, d1, [sp, #-16]!                 /* d0 save @ CBF-64          */
+        stp d0, d1, [sp, #-16]!                 /* d0 save @ CBF-80          */
         /* Save the AAPCS64 callee-saved GPRs (ppc:5052-5071 saves r13-r31). */
         stp x19, x20, [sp, #-16]!
         stp x21, x22, [sp, #-16]!
@@ -451,11 +450,10 @@ spentry callback
         mrs imm0, fpcr
         mrs imm1, fpsr
         stp imm0, imm1, [sp, #-16]!
-        /* Stash index + CBF in just-saved callee-saved regs: they must
-           survive the get_tcr C call (x9-x17 are caller-saved, and a
-           linker veneer may clobber x16/x17). */
-        mov save0, arg_w
-        mov save1, arg_x
+        /* Stash index (x9) + CBF (x10) in callee-saved regs: they must
+           survive the get_tcr C call (x9-x17 are caller-saved). */
+        mov save0, x9
+        mov save1, x10
         /* Recover the thread context (ppc:5114-5124 get_tcr(1)). */
         mov x0, #1
         bl C(get_tcr)
@@ -522,7 +520,7 @@ spentry callback
         ldr nfn, [fname, #symbol.fcell]
         ldr temp4, [nfn, #_function.codevector]
         blr temp4
-        /* Lisp wrote the result into CBF+0/+8 / CBF-64 (glue contract).
+        /* Lisp wrote the result into CBF+0/+8 / CBF-80 (glue contract).
            CBF is recomputed below from the restored sp (fixed layout);
            first publish lisp state back to the tcr (ppc:5159-5169). */
         str allocptr,  [rcontext, #tcr.save_allocptr]   /* ppc:5166-5169     */
@@ -548,16 +546,18 @@ spentry callback
         ldp d10, d11, [sp], #16
         ldp d8,  d9,  [sp], #16
         /* Reload the C result BEFORE x19/x20 are restored: sp now points at
-           the callee-saved GPR block; CBF = sp + 96 + 64. */
-        add imm2, sp, #(6*16 + 4*16)            /* imm2 = CBF                */
+           the callee-saved GPR block; CBF = sp + 96 (callee GPR) + 80
+           (d0-d7 + sret slot). */
+        add imm2, sp, #(6*16 + 5*16)            /* imm2 = CBF                */
         ldr x0, [imm2]                          /* GPR result (ppc:5213-5214)*/
         ldr x1, [imm2, #8]
         /* HFA returns (NSRect = 4×double, etc.) need v0..vN.  Reload all
-           eight volatile FP arg/result regs from the d0..d7 save area. */
-        ldp d0, d1, [imm2, #-64]
-        ldp d2, d3, [imm2, #-48]
-        ldp d4, d5, [imm2, #-32]
-        ldp d6, d7, [imm2, #-16]
+           eight volatile FP arg/result regs from the d0..d7 save area
+           (d0 @ CBF-80). */
+        ldp d0, d1, [imm2, #-80]
+        ldp d2, d3, [imm2, #-64]
+        ldp d4, d5, [imm2, #-48]
+        ldp d6, d7, [imm2, #-32]
         /* Restore callee-saved GPRs (ppc:5179-5197) and pop the arg-save
            areas (ppc:5212); x0/x1/d0-d7 carry the result (ppc:5225 blr). */
         ldp x29, lr,  [sp], #16
@@ -566,7 +566,7 @@ spentry callback
         ldp x23, x24, [sp], #16
         ldp x21, x22, [sp], #16
         ldp x19, x20, [sp], #16
-        add sp, sp, #(16*8)                     /* drop d0-d7 + x0-x7 saves  */
+        add sp, sp, #(16*8 + 16)                /* drop d0-d7 + sret + x0-x7 */
         ret
 endsp callback
 

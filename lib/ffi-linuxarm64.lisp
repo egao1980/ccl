@@ -152,8 +152,8 @@
 ;;;    goes wholly to the stack under AAPCS64 (no register/stack split);
 ;;;    this generator would read it one slot early.  No boot-path
 ;;;    callback has such a signature.
-;;;  - fp-regs-form is frame arithmetic (%inc-ptr CBF -64), not PPC's
-;;;    deref of a pointer the trampoline stored into its frame.
+;;;  - fp-regs-form is frame arithmetic (%inc-ptr CBF fp-save-offset), not
+;;;    PPC's deref of a pointer the trampoline stored into its frame.
 (defun arm64-linux::generate-callback-bindings (stack-ptr fp-args-ptr argvars argspecs result-spec struct-result-name)
   (collect ((lets)
             (rlets)
@@ -165,9 +165,8 @@
                (unless fp-regs-form
                  (setq fp-regs-form `(%inc-ptr ,stack-ptr ,arm64::callback-frame.fp-save-offset)))))
         ;; AAPCS64 composite returns (mirror expand-ff-call / x8664 callbacks):
-        ;;   :memory → indirect result in x8 (trampoline currently stamps x8
-        ;;             with the callback index — keep legacy x0 binding until
-        ;;             trampoline saves real x8; no cocoa-ide IMP uses :memory)
+        ;;   :memory → indirect result in x8; trampoline preserves x8, kernel
+        ;;             spills it at CBF-16 (callback-frame.sret-offset).
         ;;   :gpr/:hfa → value in x0/x1 or v0..vN; allocate a local record and
         ;;             copy out in generate-callback-return-value.  NEVER treat
         ;;             x0 as a stret pointer (that stole `self` for NSRange
@@ -177,9 +176,10 @@
           (let ((class (arm64::classify-record-return rtype)))
             (ecase class
               (:memory
-               (setq argvars (cons struct-result-name argvars)
-                     argspecs (cons :address argspecs)
-                     rtype *void-foreign-type*))
+               ;; Bind the caller's sret buffer; do not shift real args.
+               (lets (list struct-result-name
+                           `(%get-ptr ,stack-ptr ,arm64::callback-frame.sret-offset)))
+               (setq rtype *void-foreign-type*))
               ((:gpr :hfa)
                ;; Local result buffer; copy into CBF GPRs / V saves on exit.
                (rlets (list struct-result-name
@@ -304,7 +304,7 @@
 ;;;-----------------------------------------------------------------------
 ;;; (4) generate-callback-return-value
 ;;;-----------------------------------------------------------------------
-;;; Kernel .SPcallback reloads x0/x1 from CBF+0/+8 and d0..d7 from CBF-64
+;;; Kernel .SPcallback reloads x0/x1 from CBF+0/+8 and d0..d7 from CBF-80
 ;;; on exit.  Write scalar / register-returned composites into that area.
 ;;;
 ;;; ARM64-DEVIATION vs PPC64: singles are float bits in the d0 slot (s0),

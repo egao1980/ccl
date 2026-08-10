@@ -10,55 +10,31 @@
 (in-package :ccl)
 (setq *warn-if-redefine-kernel* nil)
 
-(format t "~&;; darwin-callback-struct-return-smoke~%")
+(format t "~&;; darwin-callback-struct-return-smoke (sret-frame-aware)~%")
 (finish-output)
+
+;; Tip frame offsets required when kernel has CBF-16 sret spill.
+(eval-when (:load-toplevel :execute)
+  (setq *cerror-on-constant-redefinition* nil)
+  (eval '(defconstant arm64::callback-frame.fp-save-offset -80))
+  (eval '(defconstant arm64::callback-frame.sret-offset -16))
+  (eval '(defconstant arm64::callback-frame.savelr-offset -168))
+  (eval '(defconstant arm64::callback-frame.stack-args-offset 64)))
 
 (use-interface-dir :cocoa)
 
 ;; Tip inbound generators (image may still have the all-stret version).
 (load (merge-pathnames "lib/ffi-linuxarm64.lisp" (ccl-directory)))
 (load (merge-pathnames "lib/ffi-darwinarm64.lisp" (ccl-directory)))
+(load (merge-pathnames "level-1/arm64-callback-support.lisp" (ccl-directory)))
 (setf (ftd-callback-bindings-function *target-ftd*)
       #'arm64-darwin::generate-callback-bindings)
 (setf (ftd-callback-return-value-function *target-ftd*)
       #'arm64-darwin::generate-callback-return-value)
 
-;; Tip outbound expand-ff-call so the Lisp→callback round-trip uses
-;; :registers (matches AppKit).  Image may still expand NSRange as stret.
-(let* ((wanted '(arm64::hfa-leaf-reps arm64::record-hfa-info
-                 arm64::classify-record-return
-                 arm64::record-type-returns-structure-as-first-arg
-                 arm64::struct-from-regbuf-values
-                 arm64::expand-ff-call))
-       (forms ()))
-  (with-open-file (s (merge-pathnames "compiler/ARM64/arm64-backend.lisp"
-                                      (ccl-directory)))
-    (loop for f = (read s nil s)
-          until (eq f s)
-          when (and (consp f) (eq (car f) 'defun)
-                    (member (cadr f) wanted :test #'eq))
-          do (push f forms)))
-  (dolist (f (nreverse forms)) (eval f))
-  (setf (ftd-ff-call-expand-function *target-ftd*)
-        #'arm64-darwin::expand-ff-call)
-  (setf (ftd-ff-call-struct-return-by-implicit-arg-function *target-ftd*)
-        #'arm64-darwin::record-type-returns-structure-as-first-arg)
-  (format t "~&;; outbound helpers ~d~%" (length forms))
-  (finish-output))
-
-;; Interpreted %ff-call must understand :registers.
-(let* ((src (merge-pathnames "level-0/ARM64/arm64-def.lisp" (ccl-directory)))
-       (form nil))
-  (with-open-file (s src)
-    (loop for f = (read s nil s)
-          until (eq f s)
-          when (and (consp f) (eq (car f) 'defun) (eq (cadr f) '%ff-call))
-          do (setq form f)))
-  (when form
-    (let ((*warn-if-redefine-kernel* nil)) (eval form))
-    (format t "~&;; %ff-call reloaded~%")
-    (finish-output)))
-
+;; Image outbound already has tip :registers / :structure-return (fa5d13be+).
+;; Do NOT surgically re-eval a subset of arm64-backend.lisp here — a partial
+;; reload (historically only EXPAND-FF-CALL) corrupts the NSRange round-trip.
 (assert (eq (arm64::classify-record-return (parse-foreign-type :<NSR>ange)) :gpr))
 (assert (eq (arm64::classify-record-return (parse-foreign-type :<NSR>ect)) :hfa))
 
@@ -128,5 +104,6 @@
   (finish-output))
 
 (format t "~&;; PASS darwin-callback-struct-return-smoke~%")
-(quit 0)
+(finish-output)
+(ff-call (foreign-symbol-address "exit") :signed-fullword 0 :void)
 )
