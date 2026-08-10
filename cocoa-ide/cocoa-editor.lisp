@@ -2207,11 +2207,11 @@
      t)))
 
 (defmethod hemlock-ext:report-hemlock-error ((view hi:hemlock-view) condition debug-p)
+  (%log-hemlock-condition condition)
   (when debug-p (maybe-log-callback-error condition))
   (let ((pane (hi::hemlock-view-pane view)))
     (when (and pane (not (%null-ptr-p pane)))
       (report-condition-in-hemlock-frame condition (#/window pane)))))
-
 (defun window-menubar-height ()
   #+cocotron (objc:objc-message-send (ccl::@class "NSMainMenuView") "menuHeight" #>CGFloat)
   #-cocotron 0.0f0)
@@ -3426,9 +3426,16 @@
 ;; user what happened...  This ensures the Cocoa selection is made visible, so it
 ;; assumes the Cocoa selection has already been synchronized with the hemlock one.
 (defmethod hemlock-ext:ensure-selection-visible ((view hi:hemlock-view))
-  (let ((tv (text-pane-text-view (hi::hemlock-view-pane view))))
-    (#/scrollRangeToVisible: tv (#/selectedRange tv))))
-
+  ;; Darwin/arm64: #/selectedRange (NSRange GPR return) or scroll during
+  ;; greeting flush has produced BOGUS objects / Hemlock sheets.  Never
+  ;; throw into the command handler-bind from display housekeeping.
+  (ignore-errors
+    (let* ((pane (hi::hemlock-view-pane view))
+           (tv (and pane (not (%null-ptr-p pane)) (text-pane-text-view pane))))
+      (when (and tv (typep tv 'macptr) (not (%null-ptr-p tv)))
+        (let ((r (#/selectedRange tv)))
+          (when (typep r 'ns:ns-range)
+            (#/scrollRangeToVisible: tv r)))))))
 (defun hemlock-ext:string-to-clipboard (string)
   (when (> (length string) 0)
     (with-cfstring (s string)

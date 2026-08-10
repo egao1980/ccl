@@ -160,11 +160,12 @@
     (ensure-directories-exist image-file)
     (ccl:copy-file (ccl::kernel-path) kernel-file :if-exists :supersede 
                    :preserve-attributes t)
+    ;; Bake arm64-safe logging even if an older fasl left :backtrace bound.
+    #+arm64-target (setq *log-callback-errors* t)
     (save-application image-file
 		      :application-class 'cocoa-ide
 		      #+windows-target #+windows-target
 		      :application-type :gui)))
-
 ;;; If we're running as a standalone .app, try to see if a bundle named
 ;;; AltConsole.app exists in our Resources directory.  If so, execute
 ;;; that bundle'es executable file, with its standard input/output/error

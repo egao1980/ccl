@@ -118,12 +118,16 @@
                                                   (1+ ccl::*break-level*)))
                         (ccl::*backtrace-contexts* (cons context ccl::*backtrace-contexts*)))  
                    (format t "~%~%*** Error in event process: ~a~%~%" condition)
-                   (print-call-history :context context :detailed-p t :count 20
+                   ;; detailed-p on arm64 walks BOGUS stack slots → nested
+                   ;; "can't determine class of #<BOGUS>" that users see as
+                   ;; the Hemlock sheet / AltConsole spam.
+                   (print-call-history :context context
+                                       :detailed-p #+arm64-target nil #-arm64-target t
+                                       :count 20
                                        :origin frame-pointer)
                    (format t "~%~%~%")
                    (force-output t)
                    ))))))))
-
 (defun enable-foreground ()
   #+apple-objc
   (progn

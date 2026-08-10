@@ -213,9 +213,41 @@
 ;; :backtrace walks stack slots; on darwinarm64 those often contain BOGUS
 ;; objects, and printing them becomes "can't determine class of #<BOGUS…>"
 ;; (the Hemlock error sheet users see).  Default to message-only on arm64.
-(defvar *log-callback-errors*
-  #+arm64-target t
-  #-arm64-target :backtrace)
+;; Use SETQ after DEFVAR: a prebound :backtrace from an older fasl/image
+;; survives DEFVAR and would otherwise be baked into Clozure CL64.app.
+(defvar *log-callback-errors* :backtrace)
+#+arm64-target (setq *log-callback-errors* t)
+#-arm64-target (setq *log-callback-errors* :backtrace)
+
+(defun %safe-object-id (x)
+  "Identify X without CLASS-OF / printing its contents (arm64 BOGUS-safe)."
+  (or (ignore-errors
+        (format nil "tag=~s typecode=~s addr=#x~x bogus=~s"
+                (ccl::lisptag x)
+                (ccl::typecode x)
+                (ccl::%address-of x)
+                (ccl::bogus-thing-p x)))
+      "#<unprintable>"))
+
+(defun %log-hemlock-condition (condition &optional (path "/tmp/ccl-hemlock-err.log"))
+  "Append CONDITION summary + frame-only BT. Never :detailed-p on arm64."
+  (ignore-errors
+    (with-open-file (s path :direction :output
+                       :if-exists :append :if-does-not-exist :create)
+      (format s "~&==== ~a ====~%" (get-universal-time))
+      (format s "condition-class=~s~%"
+              (ignore-errors (class-name (class-of condition))))
+      (format s "emsg=~a~%"
+              (or (ignore-errors (princ-to-string condition)) "<unprintable>"))
+      (when (typep condition 'type-error)
+        (format s "datum=~a expected=~s~%"
+                (%safe-object-id (type-error-datum condition))
+                (ignore-errors (type-error-expected-type condition))))
+      (let ((*debug-io* s) (*standard-output* s))
+        ;; detailed-p NIL: frame names only — arg slots are often BOGUS on arm64
+        (ignore-errors (ccl:print-call-history :count 60 :detailed-p nil)))
+      (terpri s)
+      (force-output s))))
 
 (defun maybe-log-callback-error (condition)
   (when *log-callback-errors*
@@ -224,13 +256,15 @@
       (ignore-errors (clear-output *debug-io*))
       (ignore-errors (format *debug-io* "~&Lisp error: ~s" (or emsg condition)))
       (when (eq *log-callback-errors* :backtrace)
-        (let* ((err (nth-value 1 (ignore-errors (ccl:print-call-history :detailed-p t)))))
+        ;; Prefer frame-only on arm64 even if someone forces :backtrace.
+        (let* ((detailed #+arm64-target nil #-arm64-target t)
+               (err (nth-value 1 (ignore-errors
+                                   (ccl:print-call-history :detailed-p detailed)))))
           (when err
             (ignore-errors (format *debug-io* "~&Error printing call history - "))
             (ignore-errors (print err *debug-io*))
             (ignore-errors (princ err *debug-io*))
-            (ignore-errors (force-output *debug-io*))))))))
-(defmacro with-callback-context (description &body body)
+            (ignore-errors (force-output *debug-io*))))))))(defmacro with-callback-context (description &body body)
   (let ((saved-debug-io (gensym)))
     `(ccl::with-standard-abort-handling ,(format nil "Abort ~a" description)
        (let ((,saved-debug-io *debug-io*))
@@ -288,6 +322,30 @@
 (defun nsstring-for-lisp-condition (cond)
   (%make-nsstring (double-%-in (or (ignore-errors (princ-to-string cond))
                                    "#<error printing error message>"))))
+
+;;; Darwin/arm64: log CLASS-OF failures before signaling.  The Hemlock sheet
+;;; often IS no-class-error; without a frame-only BT we cannot fix the root.
+(defvar *%original-no-class-error* nil)
+(defun %install-no-class-error-logger ()
+  (unless *%original-no-class-error*
+    (setq *%original-no-class-error* (fdefinition 'ccl::no-class-error))
+    (setf (fdefinition 'ccl::no-class-error)
+          (lambda (x)
+            (ignore-errors
+              (with-open-file (s "/tmp/ccl-no-class-error.log" :direction :output
+                                 :if-exists :append :if-does-not-exist :create)
+                (format s "~&==== ~a id=~a ====~%"
+                        (get-universal-time) (%safe-object-id x))
+                (let ((*debug-io* s) (*standard-output* s))
+                  (ignore-errors
+                    (ccl:print-call-history :count 60 :detailed-p nil)))
+                (terpri s)
+                (force-output s)))
+            ;; Re-signal with a BOGUS-safe message (avoid ~s on the datum in
+            ;; case write-internal/class-of recurses on some corrupt headers).
+            (error "Bug (probably): can't determine class of object ~a"
+                   (%safe-object-id x))))))
+(%install-no-class-error-logger)
 
 
 
