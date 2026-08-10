@@ -34,6 +34,8 @@
     (lisp-string-from-nsstring (#/path url))))
 
 (defun %cocoa-choose-file-dialog (directory file-types file button-string)
+  ;; `file' was only used by the old runModalForDirectory:file:… name field.
+  (declare (ignore file))
   (assume-cocoa-thread)
   (let* ((open-panel (#/openPanel ns:ns-open-panel))
          (types-array +null-ptr+))
@@ -51,10 +53,6 @@
       (#/setAllowedFileTypes: open-panel types-array))
     (when button-string
       (#/setPrompt: open-panel (#/autorelease (%make-nsstring button-string))))
-    ;; `file' was the old runModalForDirectory:file:types: name
-    ;; field; nameFieldStringValue is the modern equivalent on save
-    ;; panels.  For open panels, directoryURL above is enough.
-    (declare (ignore file))
     (let ((result (#/runModal open-panel)))
       (cond ((= result #$NSOKButton)
              (%panel-path-string (#/URL open-panel)))
