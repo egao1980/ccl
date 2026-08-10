@@ -26,9 +26,11 @@ if [ -z "$MARK" ]; then
 fi
 LOG=/tmp/$(basename "$SMOKE" .lisp).log
 
-# Keep a tip image inside the app Resources for consistency; kernel stays workspace.
+# CFProcessPath makes NSBundle see Clozure CL64.app.  Do NOT copy the workspace
+# REPL image over Resources/ccl/darm64cl.image — that is the standalone IDE heap;
+# clobbering it makes double-click launch a tty lisp-development-system that
+# exits immediately (no Cocoa app).  Force -I to the workspace tip image instead.
 mkdir -p "$APP/Contents/Resources/ccl"
-cp -f "$CCL_DIR/darm64cl.image" "$APP/Contents/Resources/ccl/darm64cl.image"
 
 export CFProcessPath="$APP/Contents/MacOS/darm64cl"
 # Ensure the path exists (touch stub if missing) without replacing a signed binary.
@@ -37,8 +39,9 @@ if [ ! -e "$CFProcessPath" ]; then
   cp -f "$CCL_DIR/darm64cl" "$CFProcessPath" || touch "$CFProcessPath"
 fi
 
+IMAGE="$CCL_DIR/darm64cl.image"
 "$WT" "$TIMEOUT" env CFProcessPath="$CFProcessPath" \
-  "$CCL_DIR/darm64cl" --no-init --batch < "$SMOKE" > "$LOG" 2>&1 || {
+  "$CCL_DIR/darm64cl" -I "$IMAGE" --no-init --batch < "$SMOKE" > "$LOG" 2>&1 || {
   ec=$?
   echo "IDE-SMOKE FAIL: $SMOKE exit=$ec. Tail:" >&2
   tail -50 "$LOG" >&2
