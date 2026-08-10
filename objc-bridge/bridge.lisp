@@ -787,15 +787,19 @@
    (or (gethash sig *objc-method-signatures*)
        (let ((info (make-objc-method-signature-info :type-signature sig)))
          (setf (objc-method-signature-info-function info)
+               ;; Lazy compile on first use.  ARGS is (receiver selector . msg-args).
+               ;; Arm64: never APPLY onto the send function (see %invoke-objc-send-function).
                (lambda (&rest args)
+                 (declare (dynamic-extent args))
                  (let ((f (handler-case
                               (compile-send-function-for-signature sig)
                             (error (c)
                               (%objc-unsupported-send-stub sig c)))))
                    (setf (objc-method-signature-info-function info) f)
-                   (apply f args)))
+                   (%invoke-objc-send-function f (car args) (cadr args) (cddr args))))
                (objc-method-signature-info-super-function info)
                (lambda (&rest args)
+                 (declare (dynamic-extent args))
                  (let ((f (handler-case
                               (%compile-send-function-for-signature sig t)
                             (error (c)
@@ -805,9 +809,8 @@
                                 (error "ObjC super-send for signature ~s not supported on this backend"
                                        sig))))))
                    (setf (objc-method-signature-info-super-function info) f)
-                   (apply f args)))
-               (gethash sig *objc-method-signatures*) info)))))
-(defmethod make-load-form ((siginfo objc-method-signature-info) &optional env)
+                   (%invoke-objc-send-function f (car args) (cadr args) (cddr args))))
+               (gethash sig *objc-method-signatures*) info)))))(defmethod make-load-form ((siginfo objc-method-signature-info) &optional env)
   (declare (ignore env))
   `(objc-method-signature-info ',(objc-method-signature-info-type-signature siginfo)))
 
@@ -892,10 +895,11 @@
                 (declare (dynamic-extent args))
                 (or (check-receiver receiver)
                  (with-ns-exceptions-as-errors 
-                     (apply (objc-method-signature-info-function
-                             (load-time-value                                
-                              (objc-method-info-signature-info ,first-method)))
-                            receiver ,selector args))))
+                     (%invoke-objc-send-function
+                      (objc-method-signature-info-function
+                       (load-time-value
+                        (objc-method-info-signature-info ,first-method)))
+                      receiver ,selector args))))
               :name `(:objc-dispatch ,name)))
             (let* ((protocol-pairs (let* ((pp ()))
                                      (dolist (pm (objc-message-info-protocol-methods message-info) pp)
@@ -934,7 +938,8 @@
                                       (when (typep receiver class)
                                         (return-from m (cdr pair))))))))))
                      (with-ns-exceptions-as-errors
-                         (apply function receiver ,selector args)))))
+                         (%invoke-objc-send-function
+                          function receiver ,selector args)))))
                 :name `(:objc-dispatch ,name)))))))
       (set-funcallable-instance-function
        gf
