@@ -80,12 +80,20 @@
                                        (ns:make-ns-rect 0d0 0d0 420d0 80d0))))
           (%p "display path")
           (#/setContentView: win view)
-          (#/orderFront: win (%null-ptr))
-          (dotimes (i 3)
+          (#/makeKeyAndOrderFront: win (%null-ptr))
+          ;; Force a synchronous drawRect: via lockFocus on the window's
+          ;; graphics context isn't always available; direct send matches
+          ;; 14/15 and still goes through the ObjC→Lisp callback trampoline.
+          (#/lockFocus view)
+          (#/drawRect: view (ns:make-ns-rect 0d0 0d0 420d0 80d0))
+          (#/unlockFocus view)
+          (%p "after forced drawRect step=~s ok=~s err=~s built=~s"
+              *step* *ok* *err* *built*)
+          (dotimes (i 2)
             (#/setNeedsDisplay: view #$YES)
-            (#/display view)
-            (%p "  display ~s step=~s ok=~s err=~s built=~s"
-                i *step* *ok* *err* *built*))
+            (#/displayIfNeeded win)
+            (%p "  displayIfNeeded ~s step=~s ok=~s"
+                i *step* *ok*))
           (#/close win)
           (#/release view)
           (#/release win))))
