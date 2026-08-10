@@ -552,9 +552,14 @@ spentry callback
         add imm2, sp, #(6*16 + 4*16)            /* imm2 = CBF                */
         ldr x0, [imm2]                          /* GPR result (ppc:5213-5214)*/
         ldr x1, [imm2, #8]
-        ldur d0, [imm2, #-64]                   /* FPR result                */
+        /* HFA returns (NSRect = 4×double, etc.) need v0..vN.  Reload all
+           eight volatile FP arg/result regs from the d0..d7 save area. */
+        ldp d0, d1, [imm2, #-64]
+        ldp d2, d3, [imm2, #-48]
+        ldp d4, d5, [imm2, #-32]
+        ldp d6, d7, [imm2, #-16]
         /* Restore callee-saved GPRs (ppc:5179-5197) and pop the arg-save
-           areas (ppc:5212); x0/x1/d0 carry the result (ppc:5225 blr). */
+           areas (ppc:5212); x0/x1/d0-d7 carry the result (ppc:5225 blr). */
         ldp x29, lr,  [sp], #16
         ldp x27, x28, [sp], #16
         ldp x25, x26, [sp], #16

@@ -164,10 +164,30 @@
       (flet ((set-fp-regs-form ()
                (unless fp-regs-form
                  (setq fp-regs-form `(%inc-ptr ,stack-ptr ,arm64::callback-frame.fp-save-offset)))))
+        ;; AAPCS64 composite returns (mirror expand-ff-call / x8664 callbacks):
+        ;;   :memory → indirect result in x8 (trampoline currently stamps x8
+        ;;             with the callback index — keep legacy x0 binding until
+        ;;             trampoline saves real x8; no cocoa-ide IMP uses :memory)
+        ;;   :gpr/:hfa → value in x0/x1 or v0..vN; allocate a local record and
+        ;;             copy out in generate-callback-return-value.  NEVER treat
+        ;;             x0 as a stret pointer (that stole `self` for NSRange
+        ;;             ObjC IMPs → object_getClass EXC_BREAKPOINT on mouse
+        ;;             select / #/selectionRangeForProposedRange:).
         (when (typep rtype 'foreign-record-type)
-          (setq argvars (cons struct-result-name argvars)
-                argspecs (cons :address argspecs)
-                rtype *void-foreign-type*))
+          (let ((class (arm64::classify-record-return rtype)))
+            (ecase class
+              (:memory
+               (setq argvars (cons struct-result-name argvars)
+                     argspecs (cons :address argspecs)
+                     rtype *void-foreign-type*))
+              ((:gpr :hfa)
+               ;; Local result buffer; copy into CBF GPRs / V saves on exit.
+               (rlets (list struct-result-name
+                            (or (foreign-record-type-name rtype)
+                                (unparse-foreign-type rtype))))
+               ;; HFA return writes d0..dN via fp-args-ptr even if no FP args.
+               (when (eq class :hfa)
+                 (set-fp-regs-form))))))
         (when (typep rtype 'foreign-float-type)
           (set-fp-regs-form))
         (do* ((argvars argvars (cdr argvars))
@@ -284,32 +304,58 @@
 ;;;-----------------------------------------------------------------------
 ;;; (4) generate-callback-return-value
 ;;;-----------------------------------------------------------------------
-;;; PPC64 LINE-PORT (vendor/ccl/lib/ffi-linuxppc64.lisp:180-199).
-;;; All structures are "returned" via the implicit first argument; the
-;;; binding generator already translated the return type to :void then.
-;;; The kernel trampoline reloads x0/x1 from CBF+0/+8 and d0 from CBF-64
-;;; on exit, so the value is written into the argument save area
-;;; (exactly PPC's gp_save reuse).
+;;; Kernel .SPcallback reloads x0/x1 from CBF+0/+8 and d0..d7 from CBF-64
+;;; on exit.  Write scalar / register-returned composites into that area.
 ;;;
-;;; ARM64-DEVIATION: a :single-float result is written as FLOAT BITS
-;;; (%get-single-float setf, low 32 bits of the d0 reload slot) — the C
-;;; caller reads s0.  PPC coerced to double ((float result 0.0d0)) and
-;;; wrote a double because PowerOpen returns singles double-extended in
-;;; f1; AAPCS64 does not.
+;;; ARM64-DEVIATION vs PPC64: singles are float bits in the d0 slot (s0),
+;;; not double-extended.  Record returns use classify-record-return
+;;; (:gpr / :hfa); :memory already wrote through the sret pointer and
+;;; arrives here as :void.
 (defun arm64-linux::generate-callback-return-value (stack-ptr fp-args-ptr result return-type struct-return-arg)
-  (declare (ignore struct-return-arg))
-  (unless (eq return-type *void-foreign-type*)
-    (let* ((return-type-keyword (foreign-type-to-representation-type return-type)))
-      (case return-type-keyword
-        (:single-float
-         `(setf (%get-single-float ,fp-args-ptr 0) ,result))
-        (:double-float
-         `(setf (%get-double-float ,fp-args-ptr 0) ,result))
-        (:address
-         `(setf (%get-ptr ,stack-ptr 0) ,result))
-        (:signed-doubleword
-         `(setf (%%get-signed-longlong ,stack-ptr 0) ,result))
-        (:unsigned-doubleword
-         `(setf (%%get-unsigned-longlong ,stack-ptr 0) ,result))
-        (t
-         `(setf (%%get-signed-longlong ,stack-ptr 0) ,result))))))
+  (cond
+    ((typep return-type 'foreign-record-type)
+     (let* ((class (arm64::classify-record-return return-type)))
+       (ecase class
+         (:gpr
+          (let* ((bits (ensure-foreign-type-bits return-type))
+                 (nbytes (ash (+ bits 7) -3)))
+            ;; 32-bit chunks — same as struct-from-regbuf-values.
+            (collect ((forms))
+              (do* ((b 0 (+ b 4)))
+                   ((>= b nbytes))
+                (forms `(setf (%get-unsigned-long ,stack-ptr ,b)
+                              (%get-unsigned-long ,struct-return-arg ,b))))
+              `(progn ,@(forms)))))
+         (:hfa
+          (multiple-value-bind (rep count)
+              (arm64::record-hfa-info return-type)
+            (let* ((leaves (arm64::hfa-leaf-reps return-type))
+                   (getter (if (eq rep :double-float)
+                             '%get-double-float
+                             '%get-single-float)))
+              (collect ((forms))
+                (dotimes (i count)
+                  (let* ((byte-off (cdr (nth i leaves))))
+                    (forms `(setf (,getter ,fp-args-ptr ,(* i 8))
+                                  (,getter ,struct-return-arg ,byte-off)))))
+                `(progn ,@(forms))))))
+         (:memory
+          ;; Bound as void; nothing to store.
+          nil))))
+    ((eq return-type *void-foreign-type*)
+     nil)
+    (t
+     (let* ((return-type-keyword (foreign-type-to-representation-type return-type)))
+       (case return-type-keyword
+         (:single-float
+          `(setf (%get-single-float ,fp-args-ptr 0) ,result))
+         (:double-float
+          `(setf (%get-double-float ,fp-args-ptr 0) ,result))
+         (:address
+          `(setf (%get-ptr ,stack-ptr 0) ,result))
+         (:signed-doubleword
+          `(setf (%%get-signed-longlong ,stack-ptr 0) ,result))
+         (:unsigned-doubleword
+          `(setf (%%get-unsigned-longlong ,stack-ptr 0) ,result))
+         (t
+          `(setf (%%get-signed-longlong ,stack-ptr 0) ,result)))))))
