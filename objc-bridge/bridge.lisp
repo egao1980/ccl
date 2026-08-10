@@ -810,7 +810,9 @@
                                        sig))))))
                    (setf (objc-method-signature-info-super-function info) f)
                    (%invoke-objc-send-function f (car args) (cadr args) (cddr args))))
-               (gethash sig *objc-method-signatures*) info)))))(defmethod make-load-form ((siginfo objc-method-signature-info) &optional env)
+               (gethash sig *objc-method-signatures*) info)))))
+
+(defmethod make-load-form ((siginfo objc-method-signature-info) &optional env)
   (declare (ignore env))
   `(objc-method-signature-info ',(objc-method-signature-info-type-signature siginfo)))
 
