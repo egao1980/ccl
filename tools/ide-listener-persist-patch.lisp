@@ -34,6 +34,7 @@
                     (prog1 *first-listener* (setq *first-listener* nil)))
            (ccl::startup-ccl (ccl::application-init-file ccl::*application*))
            (ui-object-note-package *nsapp* *package*))
+         ;; Must be CCL::*BATCH-FLAG* — not exported; GUI::*BATCH-FLAG* is a trap.
          (let ((ccl::*batch-flag* nil)
                (ccl::*quit-on-eof* nil))
            (funcall initial-function)))

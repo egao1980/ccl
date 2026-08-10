@@ -398,8 +398,10 @@
            (ui-object-note-package *nsapp* *package*))
          ;; Cocoa Listeners are interactive windows even when the host image
          ;; was started with --batch (IDE smokes).  Keep EOF transient.
-         (let ((*batch-flag* nil)
-               (*quit-on-eof* nil))
+         ;; *BATCH-FLAG* is not exported from CCL; an unqualified binding in
+         ;; GUI would intern a useless GUI::*BATCH-FLAG* and leave CCL's T.
+         (let ((ccl::*batch-flag* nil)
+               (ccl::*quit-on-eof* nil))
            (funcall initial-function)))
      :echoing nil
      :class class
