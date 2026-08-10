@@ -9,6 +9,14 @@
       #'arm64-darwin::generate-callback-bindings)
 (setf (ftd-callback-return-value-function *target-ftd*)
       #'arm64-darwin::generate-callback-return-value)
+;; Inspector DISASSEMBLE-LINES for arm64.
+(compile-file "ccl:compiler;ARM64;arm64-disassemble.lisp"
+              :output-file "ccl:bin;arm64-disassemble"
+              :verbose t :print nil)
+(load "ccl:bin;arm64-disassemble")
+(assert (fboundp 'disassemble-lines))
+(format t "~&;; disassemble-lines ok~%")
+(finish-output)
 ;; Struct-returning ObjC IMPs must be re-expanded with tip generators.
 (dolist (f '("cocoa-ide/fasls/cocoa-editor.da64fsl"
              "cocoa-ide/fasls/cocoa-listener.da64fsl"
