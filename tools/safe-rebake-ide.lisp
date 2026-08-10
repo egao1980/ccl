@@ -5,13 +5,14 @@
 ;;;;
 ;;;; Writes Clozure CL64.app/.../darm64cl.image.tip-new, then replaces the live
 ;;;; image only after a non-empty dump.  Registers MAP_JIT before :purify.
+;;;; Patches x8→x9 callback trampolines so xcmain / errdisp work.
 (in-package :ccl)
 
 (setq *warn-if-redefine-kernel* nil
       *cerror-on-constant-redefinition* nil
       *outstanding-deferred-warnings* nil)
 
-;; Tip save-application: dump on current process (Initial interrupt hangs).
+;; Tip save-application (Initial process-interrupt requires x9 trampolines).
 (load "ccl:lib;dumplisp.lisp")
 
 (defvar *cocoa-ide-path* "ccl:Clozure CL64.app;")
@@ -44,6 +45,10 @@
       #'arm64-darwin::generate-callback-bindings)
 (setf (ftd-callback-return-value-function *target-ftd*)
       #'arm64-darwin::generate-callback-return-value)
+;; Patch heap trampolines before anything that needs process-interrupt / UUOs.
+(format t "~&;; fixed ~s early trampoline(s)~%"
+        (fix-arm64-callback-trampolines-for-x9 t))
+(force-output)
 (compile-file "ccl:compiler;ARM64;arm64-disassemble.lisp"
               :output-file "ccl:bin;arm64-disassemble"
               :verbose t :print nil)
@@ -66,6 +71,10 @@
 (load-ide *cocoa-ide-force-compile*)
 (format t "~&;; load-ide done~%")
 (force-output)
+;; Cocoa/ObjC defcallbacks from the heap may still be x8-index trampolines.
+(let ((n (fix-arm64-callback-trampolines-for-x9 t)))
+  (format t "~&;; fixed ~s callback trampoline(s) for x9 index~%" n)
+  (force-output))
 
 #+arm64-target (setq *log-callback-errors* t)
 

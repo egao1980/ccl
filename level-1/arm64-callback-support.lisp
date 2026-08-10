@@ -77,3 +77,54 @@ callers bind without error."
              :unsigned-fullword 32
              :void)
     p))
+
+;;; Heaps baked before the x9-index trampoline change still have movz/movk
+;;; Rd=x8.  .SPcallback reads the index from x9 and treats x8 as AAPCS64
+;;; sret — so xcmain / %xerr-disp never run (process-interrupt silent;
+;;; type UUOs SEGV).  Patch Rd bits in place; safe on already-x9 stubs.
+(defun fix-arm64-callback-trampolines-for-x9 (&optional (verbose nil))
+  (let ((fixed 0))
+    (when (boundp '%pascal-functions%)
+      (let ((pf %pascal-functions%))
+        (when (vectorp pf)
+          (dotimes (i (length pf))
+            (let ((pfe (svref pf i)))
+              (when (and (vectorp pfe) (pfe.routine-descriptor pfe))
+                (let* ((p (pfe.routine-descriptor pfe))
+                       (i0 (%get-unsigned-long p 0))
+                       (i1 (%get-unsigned-long p 4))
+                       (rd0 (logand i0 #x1f))
+                       (rd1 (logand i1 #x1f)))
+                  (when (or (eql rd0 8) (eql rd1 8))
+                    (let* ((new0 (logior (logandc2 i0 #x1f) 9))
+                           (new1 (logior (logandc2 i1 #x1f) 9))
+                           (scratch (make-array 32
+                                                :element-type '(unsigned-byte 8))))
+                      (dotimes (b 32)
+                        (setf (aref scratch b) (%get-unsigned-byte p b)))
+                      (with-macptrs ((s))
+                        (%vect-data-to-macptr scratch s)
+                        (setf (%get-unsigned-long s 0) new0
+                              (%get-unsigned-long s 4) new1)
+                        #+(and darwin-target arm64-target)
+                        (ff-call (foreign-symbol-address
+                                  "darwin_arm64_jit_install_code")
+                                 :address p
+                                 :address s
+                                 :unsigned-fullword 32
+                                 :void)
+                        #-(and darwin-target arm64-target)
+                        (progn
+                          (dotimes (b 32)
+                            (setf (%get-unsigned-byte p b)
+                                  (%get-unsigned-byte s b)))
+                          (ff-call (%kernel-import
+                                    #.arm64::kernel-import-makedataexecutable)
+                                   :address p
+                                   :unsigned-fullword 32
+                                   :void)))
+                      (incf fixed)
+                      (when verbose
+                        (format t "~&;; trampoline ~s: x8 → x9~%"
+                                (pfe.sym pfe))))))))))))
+    fixed))
