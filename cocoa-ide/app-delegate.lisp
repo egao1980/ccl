@@ -215,9 +215,9 @@
     (load-ide-init-file))
   #+arm64-target
   (ignore-errors
-    ;; Untitled Listener during finishLaunching wedges/crashes the
-    ;; Darwin/arm64 event thread.  activationPolicy helps menu/focus;
-    ;; open a Listener via File → New Listener after launch.
+    ;; Untitled Listener *during* finishLaunching wedges/crashes the
+    ;; Darwin/arm64 event thread (NIL macptr / recursive IMA).  Activate
+    ;; only; open a Listener via File → New Listener after launch.
     ;; NSApplicationActivationPolicyRegular == 0.
     (#/setActivationPolicy: *nsapp* 0)
     (#/activateIgnoringOtherApps: *nsapp* #$YES))

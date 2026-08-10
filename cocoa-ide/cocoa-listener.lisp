@@ -888,11 +888,14 @@
 (defmethod ui-object-choose-listener-for-selection ((app ns:ns-application)
 						    selection)
   (declare (ignore selection))
-  (#/performSelectorOnMainThread:withObject:waitUntilDone:
-   (#/delegate *NSApp*)
-   (@selector #/ensureListener:)
-   +null-ptr+
-   #$YES)
+  ;; Never waitUntilDone from the event thread — nested
+  ;; performSelectorOnMainThread corrupts/deadlocks on darwinarm64
+  ;; (BOGUS macptr / STRUCTURE-OBJECT).  execute-in-gui funcalls when
+  ;; already on Initial, otherwise synchronous interrupt.
+  (let ((delegate (#/delegate *NSApp*)))
+    (execute-in-gui
+     (lambda ()
+       (#/ensureListener: delegate +null-ptr+))))
   (top-listener-process))
 
 (defmethod ui-object-eval-selection ((app ns:ns-application)

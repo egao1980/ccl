@@ -52,3 +52,12 @@
                          (when (eq proc (buffer-process buf))
                            (let ((hi::*current-buffer* buf))
                              (hemlock:update-current-package package))))))))
+
+(defmethod ui-object-choose-listener-for-selection ((app ns:ns-application)
+                                                    selection)
+  (declare (ignore selection))
+  (let ((delegate (#/delegate *NSApp*)))
+    (execute-in-gui
+     (lambda ()
+       (#/ensureListener: delegate +null-ptr+))))
+  (top-listener-process))
