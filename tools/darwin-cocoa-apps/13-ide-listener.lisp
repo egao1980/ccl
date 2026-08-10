@@ -94,4 +94,7 @@
 (call-in-initial-process #'%ide13-listener-probe)
 
 (format t "~&IDE-LISTENER-OK~%")
-(quit 0)
+(force-output)
+;; Creating Listener windows leaves NSApp running; plain QUIT can hang the
+;; batch process.  Hard-exit after the marker so the smoke harness sees it.
+(#_exit 0)

@@ -138,14 +138,20 @@
 ;;;    base: plain %get-single-float (PPC read a double and rounded via
 ;;;    %get-single-float-from-double-ptr — PowerOpen carries singles
 ;;;    double-extended; AAPCS64 does not).
-;;;  - records: <=64 bits arrive in one GPR slot, read low-justified
-;;;    (no BE (ash _ (- 64 bits)) re-justify); 65..128 bits inline in
-;;;    two slots (%inc-ptr, delta 16); >128 bits arrive BY REFERENCE in
-;;;    one GPR (AAPCS64 B.4) — read the pointer.  (PowerOpen passed any
-;;;    record inline at full size.)  KNOWN GAP, documented: a 9..16-byte
-;;;    record with exactly one GPR left goes wholly to the stack under
-;;;    AAPCS64 (no register/stack split); this generator would read it
-;;;    one slot early.  No boot-path callback has such a signature.
+;;;  - records (non-HFA): <=64 bits arrive in one GPR slot, read
+;;;    low-justified; 65..128 bits inline in two slots (%inc-ptr, delta
+;;;    16); >128 bits arrive BY REFERENCE in one GPR (AAPCS64 B.4).
+;;;  - records (HFA): 1..4 homogeneous float/double leaves arrive in
+;;;    consecutive V regs (NSPoint/NSSize/NSRect/CGRect).  Must unpack
+;;;    from the FP save area — treating NSRect as >128-bit-by-ref was
+;;;    the darwinarm64 text-pane #/initWithFrame: garbage-frame bug.
+;;;    KNOWN GAP: HFA that does not fit in the remaining V regs should
+;;;    spill wholly to the stack; we signal an error (no IDE callback
+;;;    currently overflows V0..V7 with an HFA).
+;;;  - KNOWN GAP: a 9..16-byte non-HFA record with exactly one GPR left
+;;;    goes wholly to the stack under AAPCS64 (no register/stack split);
+;;;    this generator would read it one slot early.  No boot-path
+;;;    callback has such a signature.
 ;;;  - fp-regs-form is frame arithmetic (%inc-ptr CBF -64), not PPC's
 ;;;    deref of a pointer the trampoline stored into its frame.
 (defun arm64-linux::generate-callback-bindings (stack-ptr fp-args-ptr argvars argspecs result-spec struct-result-name)
@@ -178,73 +184,102 @@
                  (spec (car argspecs))
                  (argtype (parse-foreign-type spec))
                  (bits (ensure-foreign-type-bits argtype)))
-            (if (and (typep argtype 'foreign-record-type)
-                     (<= bits 64))
-              (progn
-                (when name (rlets (list name (foreign-record-type-name argtype))))
-                ;; ARM64-DEVIATION (LE): copy the slot verbatim — the value
-                ;; is low-justified in its doubleword.
-                (when name (inits `(setf (%%get-unsigned-longlong ,name 0)
-                                    (%%get-unsigned-longlong ,stack-ptr ,offset)))))
-              (let* ((access-form
-                      `(,(cond
-                          ((typep argtype 'foreign-single-float-type)
-                           (when (< (incf fp-arg-num) 9)
-                             (setq use-fp-args t
-                                   delta 0))
-                           '%get-single-float)
-                          ((typep argtype 'foreign-double-float-type)
-                           (when (< (incf fp-arg-num) 9)
-                             (setq use-fp-args t
-                                   delta 0))
-                           '%get-double-float)
-                          ((and (typep argtype 'foreign-integer-type)
-                                (= (foreign-integer-type-bits argtype) 64)
-                                (foreign-integer-type-signed argtype))
-                           '%%get-signed-longlong)
-                          ((and (typep argtype 'foreign-integer-type)
-                                (= (foreign-integer-type-bits argtype) 64)
-                                (not (foreign-integer-type-signed argtype)))
-                           '%%get-unsigned-longlong)
-                          ((or (typep argtype 'foreign-pointer-type)
-                               (typep argtype 'foreign-array-type))
-                           '%get-ptr)
-                          ((typep argtype 'foreign-record-type)
-                           (if (<= bits 128)
-                             (progn
-                               (setq delta 16)
-                               '%inc-ptr)
-                             ;; ARM64-DEVIATION: >128-bit records arrive
-                             ;; by reference (AAPCS64 B.4).
-                             '%get-ptr))
-                          (t
-                           (cond ((typep argtype 'foreign-integer-type)
-                                  (let* ((bits (foreign-integer-type-bits argtype))
-                                         (signed (foreign-integer-type-signed argtype)))
-                                    ;; ARM64-DEVIATION (LE): bias 0 for all
-                                    ;; sub-word widths.
-                                    (cond ((<= bits 8)
-                                           (if signed
-                                             '%get-signed-byte
-                                             '%get-unsigned-byte))
-                                          ((<= bits 16)
-                                           (if signed
-                                             '%get-signed-word
-                                             '%get-unsigned-word))
-                                          ((<= bits 32)
-                                           (if signed
-                                             '%get-signed-long
-                                             '%get-unsigned-long))
-                                          (t
-                                           (error "Don't know how to access foreign argument of type ~s" (unparse-foreign-type argtype))))))
-                                 (t
-                                  (error "Don't know how to access foreign argument of type ~s" (unparse-foreign-type argtype))))))
-                        ,(if use-fp-args fp-args-ptr stack-ptr)
-                        ,(if use-fp-args (* 8 (1- fp-arg-num))
-                             `(+ ,offset ,bias)))))
-                (when name (lets (list name access-form)))
-                (when use-fp-args (set-fp-regs-form))))))))))
-
+            (multiple-value-bind (hfa-rep hfa-count)
+                (if (typep argtype 'foreign-record-type)
+                  (arm64::record-hfa-info argtype)
+                  (values nil nil))
+              (cond
+                ;; AAPCS64 HFA arg: unpack V-reg saves into a local record.
+                (hfa-rep
+                 (setq delta 0)
+                 (unless (<= (+ fp-arg-num hfa-count) 8)
+                   (error "arm64 callback: HFA ~s needs ~d V regs but only ~d remain"
+                          (unparse-foreign-type argtype)
+                          hfa-count
+                          (- 8 fp-arg-num)))
+                 (when name
+                   (let* ((rname (or (foreign-record-type-name argtype)
+                                     (unparse-foreign-type argtype)))
+                          (leaves (arm64::hfa-leaf-reps argtype))
+                          (getter (if (eq hfa-rep :double-float)
+                                    '%get-double-float
+                                    '%get-single-float)))
+                     (rlets (list name rname))
+                     (set-fp-regs-form)
+                     (dotimes (i hfa-count)
+                       (let* ((leaf (nth i leaves))
+                              (dst-off (cdr leaf)))
+                         (incf fp-arg-num)
+                         (inits `(setf (,getter ,name ,dst-off)
+                                       (,getter ,fp-args-ptr
+                                                ,(* 8 (1- fp-arg-num))))))))))
+                ;; Non-HFA <=64-bit record in one GPR.
+                ((and (typep argtype 'foreign-record-type)
+                      (<= bits 64))
+                 (when name (rlets (list name (foreign-record-type-name argtype))))
+                 ;; ARM64-DEVIATION (LE): copy the slot verbatim — the value
+                 ;; is low-justified in its doubleword.
+                 (when name (inits `(setf (%%get-unsigned-longlong ,name 0)
+                                     (%%get-unsigned-longlong ,stack-ptr ,offset)))))
+                (t
+                 (let* ((access-form
+                         `(,(cond
+                             ((typep argtype 'foreign-single-float-type)
+                              (when (< (incf fp-arg-num) 9)
+                                (setq use-fp-args t
+                                      delta 0))
+                              '%get-single-float)
+                             ((typep argtype 'foreign-double-float-type)
+                              (when (< (incf fp-arg-num) 9)
+                                (setq use-fp-args t
+                                      delta 0))
+                              '%get-double-float)
+                             ((and (typep argtype 'foreign-integer-type)
+                                   (= (foreign-integer-type-bits argtype) 64)
+                                   (foreign-integer-type-signed argtype))
+                              '%%get-signed-longlong)
+                             ((and (typep argtype 'foreign-integer-type)
+                                   (= (foreign-integer-type-bits argtype) 64)
+                                   (not (foreign-integer-type-signed argtype)))
+                              '%%get-unsigned-longlong)
+                             ((or (typep argtype 'foreign-pointer-type)
+                                  (typep argtype 'foreign-array-type))
+                              '%get-ptr)
+                             ((typep argtype 'foreign-record-type)
+                              (if (<= bits 128)
+                                (progn
+                                  (setq delta 16)
+                                  '%inc-ptr)
+                                ;; Non-HFA >128-bit records arrive by
+                                ;; reference (AAPCS64 B.4).
+                                '%get-ptr))
+                             (t
+                              (cond ((typep argtype 'foreign-integer-type)
+                                     (let* ((bits (foreign-integer-type-bits argtype))
+                                            (signed (foreign-integer-type-signed argtype)))
+                                       ;; ARM64-DEVIATION (LE): bias 0 for all
+                                       ;; sub-word widths.
+                                       (cond ((<= bits 8)
+                                              (if signed
+                                                '%get-signed-byte
+                                                '%get-unsigned-byte))
+                                             ((<= bits 16)
+                                              (if signed
+                                                '%get-signed-word
+                                                '%get-unsigned-word))
+                                             ((<= bits 32)
+                                              (if signed
+                                                '%get-signed-long
+                                                '%get-unsigned-long))
+                                             (t
+                                              (error "Don't know how to access foreign argument of type ~s" (unparse-foreign-type argtype))))))
+                                    (t
+                                     (error "Don't know how to access foreign argument of type ~s" (unparse-foreign-type argtype))))))
+                           ,(if use-fp-args fp-args-ptr stack-ptr)
+                           ,(if use-fp-args (* 8 (1- fp-arg-num))
+                                `(+ ,offset ,bias)))))
+                   (when name (lets (list name access-form)))
+                   (when use-fp-args (set-fp-regs-form))))))))))))
 
 ;;;-----------------------------------------------------------------------
 ;;; (4) generate-callback-return-value

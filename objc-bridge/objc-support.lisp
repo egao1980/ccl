@@ -169,12 +169,19 @@
 
 (defvar *class-init-keywords* (make-hash-table :test #'eq))
 
+(defun objc-init-result-type-p (result-type)
+  "Init methods historically returned :id; modern SDKs use :instancetype.
+Both are object returns and must participate in make-instance init-keyword
+registration (otherwise :with-frame etc. silently fall back to #/init)."
+  (or (eq result-type :id)
+      (eq result-type :instancetype)))
+
 (defun process-init-message (message-info)
   (let* ((keys (objc-to-lisp-init (objc-message-info-message-name message-info))))
     (when keys
       (let* ((keyinfo (cons keys (objc-message-info-lisp-name message-info))))
         (dolist (method (objc-message-info-methods message-info))
-          (when (and (eq :id (objc-method-info-result-type method))
+          (when (and (objc-init-result-type-p (objc-method-info-result-type method))
                      (let* ((flags (objc-method-info-flags method)))
                        (not (or (memq :class flags)
                                 (memq :protocol flags)))))
@@ -246,7 +253,22 @@
               (values '#/init nil)))
           (values '#/init nil))
       (if initfunction
-        (let* ((instance (apply initfunction (#/alloc class) args)))
+        ;; Never APPLY onto ObjC send GFs on arm64 (HFA/struct args & returns).
+        (let* ((obj (#/alloc class))
+               (instance
+                (let ((n (length args)))
+                  (declare (fixnum n))
+                  (case n
+                    (0 (funcall initfunction obj))
+                    (1 (funcall initfunction obj (car args)))
+                    (2 (funcall initfunction obj (car args) (cadr args)))
+                    (3 (funcall initfunction obj (car args) (cadr args) (caddr args)))
+                    (4 (funcall initfunction obj (car args) (cadr args)
+                                (caddr args) (cadddr args)))
+                    (5 (funcall initfunction obj (car args) (cadr args)
+                                (caddr args) (cadddr args) (nth 4 args)))
+                    (t (error "send-init-message-for-class: ~d init args not supported"
+                              n))))))
           (ensure-lisp-slots instance class)
           instance)
         (error "Can't determine ObjC init function for class ~s and initargs ~s." class initargs)))))
