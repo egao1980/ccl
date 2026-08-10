@@ -12,6 +12,7 @@
 ;; Struct-returning ObjC IMPs must be re-expanded with tip generators.
 (dolist (f '("cocoa-ide/fasls/cocoa-editor.da64fsl"
              "cocoa-ide/fasls/cocoa-listener.da64fsl"
+             "cocoa-ide/fasls/xapropos.da64fsl"
              "cocoa-ide/fasls/hemlock-text.da64fsl"))
   (when (probe-file f)
     (delete-file f)

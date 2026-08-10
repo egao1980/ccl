@@ -389,7 +389,10 @@ catch_mach_exception_raise_state(mach_port_t exception_port,
         Boolean nx = (pcval == far);
         static int wx_logs;
         if (darwin_arm64_try_wx_fixup(pcval, far, nx)) {
-          if (wx_logs < 16) {
+          /* Successful fixups are normal MAP_JIT / purify traffic. Logging
+             them to dbgout launches AltConsole and looks like a fault.
+             Set CCL_DEBUG_WX=1 to keep the first few traces. */
+          if (wx_logs < 16 && getenv("CCL_DEBUG_WX")) {
             wx_logs++;
             fprintf(dbgout,
                     "[darwinarm64] W^X fixup #%d %s far=0x%lx pc=0x%lx\n",
