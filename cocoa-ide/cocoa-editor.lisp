@@ -1630,38 +1630,44 @@
 ;;; Draw a string in the modeline view.  The font and other attributes
 ;;; are initialized lazily; apparently, calling the Font Manager too
 ;;; early in the loading sequence confuses some Carbon libraries that're
-;;; used in the event dispatch mechanism,
+;;; used in the event dispatch mechanism.
+;;;
+;;; Darwin/arm64: avoid WITH-SLOTS on foreign ObjC slots.  make-ns-point /
+;;; drawAtPoint:withAttributes: still fault in #/drawRect: callbacks
+;;; (CLASS-CELL-TYPEP @ #x30000000015BF4); keep the string path unused
+;;; until that HFA/send path is fixed.  Border rects must use make-ns-rect
+;;; (with-ns-rect / mutating #/bounds temps wedge the event thread).
 (defun draw-modeline-string (the-modeline-view)
-  (with-slots (text-attributes) the-modeline-view
-    (let* ((buffer (buffer-for-modeline-view the-modeline-view)))
-      (when buffer
-	(let* ((string
-                (apply #'concatenate 'string
-                       (mapcar
-                        #'(lambda (field)
-                            (or (ignore-errors 
-                                  (funcall (hi::modeline-field-function field) buffer))
-                                ""))
-                        (hi::buffer-modeline-fields buffer)))))
-	  (#/drawAtPoint:withAttributes: (#/autorelease (%make-nsstring string))
-                                         (ns:make-ns-point 5 1)
-                                         text-attributes))))))
+  (let* ((text-attributes (modeline-text-attributes the-modeline-view))
+         (buffer (buffer-for-modeline-view the-modeline-view)))
+    (when (and buffer (not (%null-ptr-p text-attributes)))
+      (let* ((string
+              (apply #'concatenate 'string
+                     (mapcar
+                      #'(lambda (field)
+                          (or (ignore-errors
+                                (funcall (hi::modeline-field-function field) buffer))
+                              ""))
+                      (hi::buffer-modeline-fields buffer)))))
+        (#/drawAtPoint:withAttributes: (#/autorelease (%make-nsstring string))
+                                       (ns:make-ns-point 5.0d0 1.0d0)
+                                       text-attributes)))))
 
 (objc:defmethod (#/drawRect: :void) ((self modeline-view) (rect :<NSR>ect))
   (declare (ignorable rect))
   (let* ((bounds (#/bounds self))
-	 (context (#/currentContext ns:ns-graphics-context)))
+         (context (#/currentContext ns:ns-graphics-context))
+         (w (float (ns:ns-rect-width bounds) 1.0d0))
+         (h (float (ns:ns-rect-height bounds) 1.0d0))
+         (top (ns:make-ns-rect 0.0d0 0.0d0 w 0.5d0))
+         (bot (ns:make-ns-rect 0.0d0 (- h 0.5d0) w 0.5d0)))
     (#/saveGraphicsState context)
-    (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.9 1.0))
+    (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.9d0 1.0d0))
     (#_NSRectFill bounds)
-    (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.3333 1.0))
-    ;; Draw borders on top and bottom.
-    (ns:with-ns-rect (r 0 0 (ns:ns-rect-width bounds) 0.5)
-      (#_NSRectFill r))
-    (ns:with-ns-rect (r 0 (- (ns:ns-rect-height bounds) 0.5)
-                        (ns:ns-rect-width bounds) 0.5)
-      (#_NSRectFill r))
-    (draw-modeline-string self)
+    (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.3333d0 1.0d0))
+    (#_NSRectFill top)
+    (#_NSRectFill bot)
+    ;; (draw-modeline-string self) — deferred; see comment above.
     (#/restoreGraphicsState context)))
 
 ;;; Hook things up so that the modeline is updated whenever certain buffer
