@@ -210,7 +210,12 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 
-(defvar *log-callback-errors* :backtrace)
+;; :backtrace walks stack slots; on darwinarm64 those often contain BOGUS
+;; objects, and printing them becomes "can't determine class of #<BOGUS…>"
+;; (the Hemlock error sheet users see).  Default to message-only on arm64.
+(defvar *log-callback-errors*
+  #+arm64-target t
+  #-arm64-target :backtrace)
 
 (defun maybe-log-callback-error (condition)
   (when *log-callback-errors*
@@ -225,7 +230,6 @@
             (ignore-errors (print err *debug-io*))
             (ignore-errors (princ err *debug-io*))
             (ignore-errors (force-output *debug-io*))))))))
-
 (defmacro with-callback-context (description &body body)
   (let ((saved-debug-io (gensym)))
     `(ccl::with-standard-abort-handling ,(format nil "Abort ~a" description)

@@ -3,20 +3,27 @@
 (in-package :gui)
 
 (defun draw-modeline-string (the-modeline-view)
-  (let* ((text-attributes (modeline-text-attributes the-modeline-view))
-         (buffer (buffer-for-modeline-view the-modeline-view)))
-    (when (and buffer (not (ccl::%null-ptr-p text-attributes)))
-      (let* ((string
-              (with-output-to-string (out)
-                (dolist (field (hi::buffer-modeline-fields buffer))
-                  (write-string
-                   (or (ignore-errors
-                         (funcall (hi::modeline-field-function field) buffer))
-                       "")
-                   out)))))
-        (#/drawAtPoint:withAttributes: (#/autorelease (ccl::%make-nsstring string))
-                                       (ns:make-ns-point 5.0d0 1.0d0)
-                                       text-attributes)))))
+  (ignore-errors
+    (let* ((text-attributes (modeline-text-attributes the-modeline-view))
+           (buffer (buffer-for-modeline-view the-modeline-view)))
+      (when (and buffer
+                 (typep text-attributes 'macptr)
+                 (not (ccl::%null-ptr-p text-attributes)))
+        (let* ((string
+                (with-output-to-string (out)
+                  (dolist (field (hi::buffer-modeline-fields buffer))
+                    (write-string
+                     (or (ignore-errors
+                           (let ((s (funcall (hi::modeline-field-function field) buffer)))
+                             (and (stringp s) s)))
+                         "")
+                     out)))))
+          (when (plusp (length string))
+            (let ((ns (#/autorelease (ccl::%make-nsstring string))))
+              (when (and (typep ns 'macptr) (not (ccl::%null-ptr-p ns)))
+                (#/drawAtPoint:withAttributes: ns
+                                               (ns:make-ns-point 5.0d0 1.0d0)
+                                               text-attributes)))))))))
 
 (objc:defmethod (#/drawRect: :void) ((self modeline-view) (rect :<NSR>ect))
   (declare (ignorable rect))
@@ -34,3 +41,6 @@
     (#_NSRectFill bot)
     (draw-modeline-string self)
     (#/restoreGraphicsState context)))
+
+#+arm64-target
+(setq *log-callback-errors* t)
