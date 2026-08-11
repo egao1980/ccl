@@ -1,5 +1,4 @@
-;;;; Live patch: Trace on a selected form like (+ 1 2) must not enqueue
-;;;; (TRACE (+ 1 2)).  Load into a running Cocoa IDE (or via home:ccl-init).
+;;;; Live patch: contextual Trace/Source/Inspect for selected forms like (+ 1 2).
 ;;;;
 ;;;;   (load "ccl:tools;ide-trace-selection-fix.lisp")
 (in-package :gui)
@@ -17,19 +16,43 @@
                          (list-all-packages)))))
     (find-symbol-in-packages string packages)))
 
-(defun traceable-selection (raw)
+(defun selection-function-name (raw)
   (cond ((and (symbolp raw) (not (null raw))) raw)
         ((and (consp raw) (symbolp (car raw))) (car raw))
         (t nil)))
+
+(defun traceable-selection (raw)
+  (selection-function-name raw))
 
 (objc:defmethod (#/traceSelection: :void) ((self hemlock-text-view) sender)
   (declare (ignore sender))
   (with-string-under-cursor (self symbol-name buffer)
     (let* ((raw (find-symbol-in-buffer-packages symbol-name buffer))
-           (sym (traceable-selection raw)))
+           (sym (selection-function-name raw)))
       (if sym
         (eval-in-listener (format nil "(trace ~S)" sym))
         (#_NSBeep)))))
 
-(format t "~&;; ide-trace-selection-fix loaded~%")
+(objc:defmethod (#/inspectSelection: :void) ((self hemlock-text-view) sender)
+  (declare (ignore sender))
+  (with-string-under-cursor (self symbol-name buffer)
+    (let* ((raw (find-symbol-in-buffer-packages symbol-name buffer)))
+      (if (or (symbolp raw) (consp raw) (streamp raw) (typep raw 'structure-object))
+        (inspect raw)
+        (#_NSBeep)))))
+
+(objc:defmethod (#/sourceForSelection: :void) ((self hemlock-text-view) sender)
+  (declare (ignore sender))
+  (with-string-under-cursor (self symbol-name buffer)
+    (let* ((raw (find-symbol-in-buffer-packages symbol-name buffer))
+           (sym (selection-function-name raw)))
+      (cond
+        ((null sym) (#_NSBeep))
+        (t
+         (handler-case (hemlock:edit-definition sym)
+           (error (c)
+             (log-debug "Source of ~s failed: ~a" sym c)
+             (#_NSBeep))))))))
+
+(format t "~&;; ide-trace-selection-fix loaded (Trace/Source/Inspect)~%")
 (force-output)

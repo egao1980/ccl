@@ -1839,13 +1839,17 @@
                          (list-all-packages)))))
     (find-symbol-in-packages string packages)))
 
-(defun traceable-selection (raw)
-  "Turn a contextual-menu selection into something TRACE can accept.
-   Selecting a form like (+ 1 2) used to enqueue (TRACE (+ 1 2)) which signals
-   and can deadlock the darwinarm64 event thread while printing the error."
+(defun selection-function-name (raw)
+  "Turn a contextual-menu selection into a function name.
+   Selecting a form like (+ 1 2) used to pass the list through to TRACE/ED,
+   which errors (and on darwinarm64 can wedge the event thread)."
   (cond ((and (symbolp raw) (not (null raw))) raw)
         ((and (consp raw) (symbolp (car raw))) (car raw))
         (t nil)))
+
+;; Older name from the Trace-only fix.
+(defun traceable-selection (raw)
+  (selection-function-name raw))
 
 (defun choose-listener ()
   (ui-object-choose-listener-for-selection *NSApp* nil))
@@ -1868,7 +1872,7 @@
   (declare (ignore sender))
   (with-string-under-cursor (self symbol-name buffer)
     (let* ((raw (find-symbol-in-buffer-packages symbol-name buffer))
-           (sym (traceable-selection raw)))
+           (sym (selection-function-name raw)))
       (if sym
         (eval-in-listener (format nil "(trace ~S)" sym))
         (#_NSBeep)))))
@@ -1876,15 +1880,27 @@
 (objc:defmethod (#/inspectSelection: :void) ((self hemlock-text-view) sender)
   (declare (ignore sender))
   (with-string-under-cursor (self symbol-name buffer)
-    (let* ((sym (find-symbol-in-buffer-packages symbol-name buffer)))
-      (inspect sym))))
+    (let* ((raw (find-symbol-in-buffer-packages symbol-name buffer)))
+      ;; Lists/forms are valid INSPECT targets; symbols preferred when present.
+      (if (or (symbolp raw) (consp raw) (streamp raw) (typep raw 'structure-object))
+        (inspect raw)
+        (#_NSBeep)))))
 
 (objc:defmethod (#/sourceForSelection: :void) ((self hemlock-text-view) sender)
   (declare (ignore sender))
   (with-string-under-cursor (self symbol-name buffer)
-    (let* ((sym (find-symbol-in-buffer-packages symbol-name buffer)))
-      ;(execute-in-gui (lambda () (ed sym))) ; NO! If this errors, it throws to the console. Same with execute-in-buffer.
-      (eval-in-listener (format nil "(ed '~S)" sym)))))
+    (let* ((raw (find-symbol-in-buffer-packages symbol-name buffer))
+           (sym (selection-function-name raw)))
+      (cond
+        ((null sym) (#_NSBeep))
+        ;; Already on the Cocoa event thread (menu action). Call edit-definition
+        ;; here — do NOT eval-in-listener (ed …): that waits on execute-in-gui from
+        ;; the Listener and can semaphore-deadlock on darwinarm64.
+        (t
+         (handler-case (hemlock:edit-definition sym)
+           (error (c)
+             (log-debug "Source of ~s failed: ~a" sym c)
+             (#_NSBeep))))))))
 
 (hi:defcommand "Inspect Symbol" (p)
   "Inspects current symbol."
@@ -1892,7 +1908,10 @@
   (let* ((buffer (hi:current-buffer))
          (fun-name (hemlock::symbol-at-point buffer)))
     (if fun-name
-      (inspect (find-symbol-in-buffer-packages fun-name buffer))
+      (let ((raw (find-symbol-in-buffer-packages fun-name buffer)))
+        (if (or (symbolp raw) (consp raw))
+          (inspect raw)
+          (hi:beep)))
       (hi:beep))))
 
 ;;; If we don't override this, NSTextView will start adding Google/
