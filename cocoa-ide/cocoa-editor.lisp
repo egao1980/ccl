@@ -1825,13 +1825,27 @@
         (t (ignore-errors (read-from-string string)))))
 
 (defun find-symbol-in-buffer-packages (string buffer)
-  (let ((package-name (hi::variable-value 'hemlock::current-package :buffer buffer))
+  (let ((package-name (ignore-errors
+                        (hi::variable-value 'hemlock::current-package :buffer buffer)))
         (packages nil))
     (unless (find #\: string) ; don't bother looking in other packages if the string itself contains a package designator
-      (setf packages (append ; all packages in order, starting with the ones of this buffer
-                      #1=(cons package-name (package-use-list package-name))
-                      (set-difference (list-all-packages) #1#))))
+      ;; NIL/bogus buffer package must not call PACKAGE-USE-LIST (errors and can
+      ;; wedge the Cocoa event thread when Trace/Inspect run from a menu).
+      (let* ((pkg (and package-name (find-package package-name)))
+             (preferred (and pkg (cons package-name (package-use-list pkg)))))
+        (setf packages (if preferred
+                         (append preferred
+                                 (set-difference (list-all-packages) preferred))
+                         (list-all-packages)))))
     (find-symbol-in-packages string packages)))
+
+(defun traceable-selection (raw)
+  "Turn a contextual-menu selection into something TRACE can accept.
+   Selecting a form like (+ 1 2) used to enqueue (TRACE (+ 1 2)) which signals
+   and can deadlock the darwinarm64 event thread while printing the error."
+  (cond ((and (symbolp raw) (not (null raw))) raw)
+        ((and (consp raw) (symbolp (car raw))) (car raw))
+        (t nil)))
 
 (defun choose-listener ()
   (ui-object-choose-listener-for-selection *NSApp* nil))
@@ -1853,8 +1867,11 @@
 (objc:defmethod (#/traceSelection: :void) ((self hemlock-text-view) sender)
   (declare (ignore sender))
   (with-string-under-cursor (self symbol-name buffer)
-    (let* ((sym (find-symbol-in-buffer-packages symbol-name buffer)))
-      (eval-in-listener (format nil "(trace ~S)" sym)))))
+    (let* ((raw (find-symbol-in-buffer-packages symbol-name buffer))
+           (sym (traceable-selection raw)))
+      (if sym
+        (eval-in-listener (format nil "(trace ~S)" sym))
+        (#_NSBeep)))))
 
 (objc:defmethod (#/inspectSelection: :void) ((self hemlock-text-view) sender)
   (declare (ignore sender))
