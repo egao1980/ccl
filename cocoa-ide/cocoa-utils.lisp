@@ -230,7 +230,7 @@
       "#<unprintable>"))
 
 (defun %log-hemlock-condition (condition &optional (path "/tmp/ccl-hemlock-err.log"))
-  "Append CONDITION summary + frame-only BT. Never :detailed-p on arm64."
+  "Append CONDITION summary + frame-only BT. Never walk stack arg slots."
   (ignore-errors
     (with-open-file (s path :direction :output
                        :if-exists :append :if-does-not-exist :create)
@@ -243,9 +243,8 @@
         (format s "datum=~a expected=~s~%"
                 (%safe-object-id (type-error-datum condition))
                 (ignore-errors (type-error-expected-type condition))))
-      (let ((*debug-io* s) (*standard-output* s))
-        ;; detailed-p NIL: frame names only — arg slots are often BOGUS on arm64
-        (ignore-errors (ccl:print-call-history :count 60 :detailed-p nil)))
+      (dolist (line (%safe-call-history-lines 60))
+        (write-line line s))
       (terpri s)
       (force-output s))))
 
@@ -327,7 +326,36 @@
 ;;; often IS no-class-error; without a frame-only BT we cannot fix the root.
 (defvar *%original-no-class-error* nil)
 (defvar *%logging-no-class-error* nil)
-(defun %install-no-class-error-logger ()
+
+(defun %safe-frame-name (lfun)
+  (or (ignore-errors (function-name lfun))
+      (ignore-errors (ccl::%lfun-name-string lfun))
+      (ignore-errors (princ-to-string lfun))
+      "<fn>"))
+
+(defun %safe-call-history-lines (&optional (count 60))
+  "Frame names only — never format stack slot values (BOGUS → CLASS-OF loop)."
+  (let ((i 0) (lines '()))
+    (ignore-errors
+      (ccl:map-call-frames
+       (lambda (p context)
+         (declare (ignore context))
+         (when (< i count)
+           (multiple-value-bind (lfun pc) (ccl::cfp-lfun p)
+             (push (format nil "  ~d ~a pc=~a"
+                           i
+                           (if lfun (%safe-frame-name lfun) "<non-function>")
+                           pc)
+                   lines))
+           (incf i)))
+       :count count
+       :test nil))
+    (nreverse lines)))
+
+(defun %install-no-class-error-logger (&key force)
+  (when (and force *%original-no-class-error*)
+    (setf (fdefinition 'ccl::no-class-error) *%original-no-class-error*)
+    (setq *%original-no-class-error* nil))
   (unless *%original-no-class-error*
     (setq *%original-no-class-error* (fdefinition 'ccl::no-class-error))
     (setf (fdefinition 'ccl::no-class-error)
@@ -337,11 +365,14 @@
                 (ignore-errors
                   (with-open-file (s "/tmp/ccl-no-class-error.log" :direction :output
                                      :if-exists :append :if-does-not-exist :create)
-                    (format s "~&==== ~a id=~a ====~%"
-                            (get-universal-time) (%safe-object-id x))
-                    (let ((*debug-io* s) (*standard-output* s))
-                      (ignore-errors
-                        (ccl:print-call-history :count 60 :detailed-p nil)))
+                    (format s "~&==== ~a id=~a proc=~s ====~%"
+                            (get-universal-time)
+                            (%safe-object-id x)
+                            (ignore-errors (process-name *current-process*)))
+                    (format s "whostate=~s~%"
+                            (ignore-errors (process-whostate *current-process*)))
+                    (dolist (line (%safe-call-history-lines 60))
+                      (write-line line s))
                     (terpri s)
                     (force-output s)))))
             ;; Re-signal with a BOGUS-safe message (avoid ~s on the datum in
