@@ -6,6 +6,13 @@
 ;;;; Writes Clozure CL64.app/.../darm64cl.image.tip-new, then replaces the live
 ;;;; image only after a non-empty dump.  Registers MAP_JIT before :purify.
 ;;;; Patches x8→x9 callback trampolines so xcmain / errdisp work.
+;;;;
+;;;; REGRESSION (2026-08-11): deleting cocoa fasls + recompiling them under tip
+;;;; FFI generators produced a heap where Listener typing dies in GC
+;;;; (mark_tstack_area → Bug).  Prefer tools/patch-tramps-only-dump-ide.lisp
+;;;; (trampoline patch only, no cocoa recompile) when the IDE heap already
+;;;; types.  Set CCL_SAFE_REBAKE_RECOMPILE=1 to opt back into fasl deletes +
+;;;; tip-FFI generator install (HFA/callback ABI experiments only).
 (in-package :ccl)
 
 (setq *warn-if-redefine-kernel* nil
@@ -31,41 +38,46 @@
 
 (assert (probe-file *cocoa-ide-path*) () "Bundle missing: ~s" *cocoa-ide-path*)
 
-;; Tip callback ABI generators (match rebuild-ide-callback-abi.lisp).
-(format t "~&;; tip callback-frame offsets + generators~%")
-(force-output)
-(eval '(defconstant arm64::callback-frame.fp-save-offset -80))
-(eval '(defconstant arm64::callback-frame.sret-offset -16))
-(eval '(defconstant arm64::callback-frame.savelr-offset -168))
-(eval '(defconstant arm64::callback-frame.stack-args-offset 64))
-(load "ccl:lib;ffi-linuxarm64.lisp")
-(load "ccl:lib;ffi-darwinarm64.lisp")
 (load "ccl:level-1;arm64-callback-support.lisp")
-(setf (ftd-callback-bindings-function *target-ftd*)
-      #'arm64-darwin::generate-callback-bindings)
-(setf (ftd-callback-return-value-function *target-ftd*)
-      #'arm64-darwin::generate-callback-return-value)
 ;; Patch heap trampolines before anything that needs process-interrupt / UUOs.
 (format t "~&;; fixed ~s early trampoline(s)~%"
         (fix-arm64-callback-trampolines-for-x9 t))
 (force-output)
-(compile-file "ccl:compiler;ARM64;arm64-disassemble.lisp"
-              :output-file "ccl:bin;arm64-disassemble"
-              :verbose t :print nil)
-(load "ccl:bin;arm64-disassemble")
-(assert (fboundp 'disassemble-lines))
 
-(dolist (f '("cocoa-ide/fasls/cocoa-editor.da64fsl"
-             "cocoa-ide/fasls/cocoa-listener.da64fsl"
-             "cocoa-ide/fasls/xapropos.da64fsl"
-             "cocoa-ide/fasls/hemlock-text.da64fsl"
-             "cocoa-ide/fasls/file-dialogs.da64fsl"
-             "cocoa-ide/fasls/search-files.da64fsl"
-             "cocoa-ide/fasls/start.da64fsl"))
-  (when (probe-file f)
-    (delete-file f)
-    (format t "~&;; deleted ~s~%" f)))
-(force-output)
+(let ((recompile (equal (getenv "CCL_SAFE_REBAKE_RECOMPILE") "1")))
+  (if recompile
+    (progn
+      (format t "~&;; CCL_SAFE_REBAKE_RECOMPILE=1: tip FFI generators + fasl deletes~%")
+      (force-output)
+      (eval '(defconstant arm64::callback-frame.fp-save-offset -80))
+      (eval '(defconstant arm64::callback-frame.sret-offset -16))
+      (eval '(defconstant arm64::callback-frame.savelr-offset -168))
+      (eval '(defconstant arm64::callback-frame.stack-args-offset 64))
+      (load "ccl:lib;ffi-linuxarm64.lisp")
+      (load "ccl:lib;ffi-darwinarm64.lisp")
+      (setf (ftd-callback-bindings-function *target-ftd*)
+            #'arm64-darwin::generate-callback-bindings)
+      (setf (ftd-callback-return-value-function *target-ftd*)
+            #'arm64-darwin::generate-callback-return-value)
+      (compile-file "ccl:compiler;ARM64;arm64-disassemble.lisp"
+                    :output-file "ccl:bin;arm64-disassemble"
+                    :verbose t :print nil)
+      (load "ccl:bin;arm64-disassemble")
+      (assert (fboundp 'disassemble-lines))
+      (dolist (f '("cocoa-ide/fasls/cocoa-editor.da64fsl"
+                   "cocoa-ide/fasls/cocoa-listener.da64fsl"
+                   "cocoa-ide/fasls/xapropos.da64fsl"
+                   "cocoa-ide/fasls/hemlock-text.da64fsl"
+                   "cocoa-ide/fasls/file-dialogs.da64fsl"
+                   "cocoa-ide/fasls/search-files.da64fsl"
+                   "cocoa-ide/fasls/start.da64fsl"))
+        (when (probe-file f)
+          (delete-file f)
+          (format t "~&;; deleted ~s~%" f)))
+      (force-output)
+      (setq *cocoa-ide-force-compile* t))
+    (format t "~&;; skipping tip-FFI recompile (set CCL_SAFE_REBAKE_RECOMPILE=1 to enable)~%"))
+  (force-output))
 
 (load "ccl:cocoa-ide;defsystem.lisp")
 (load-ide *cocoa-ide-force-compile*)
