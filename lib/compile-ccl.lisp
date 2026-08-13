@@ -191,10 +191,9 @@
                         (:darwinarm 'ffi-darwinarm)
                         (:darwinarm64 'ffi-darwinarm64)
                         (:linuxarm64 'ffi-linuxarm64))))
-            ;; Darwin arm64 reuses AAPCS64 callback generators from the
-            ;; Linux module; cold-load must have that fasl (not .lisp).
-            (if (eq target :darwinarm64)
-              (list 'ffi-linuxarm64 ffi)
+            ;; Both arm64 targets share the AAPCS64 module.
+            (if (memq target '(:darwinarm64 :linuxarm64))
+              (list 'ffi-arm64 ffi)
               (list ffi)))))
 
 
