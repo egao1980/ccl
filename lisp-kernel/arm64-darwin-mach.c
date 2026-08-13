@@ -32,13 +32,31 @@
 
 extern area *readonly_area;
 extern int page_size, log2_page_size;
-extern Boolean darwin_arm64_in_code_heap(void *);
+
+/* CCL_DEBUG_WX=1 enables verbose Mach-exception diagnostics (AltConsole). */
+static int
+darwin_arm64_debug_wx(void)
+{
+  static int flag = -1;
+  if (flag < 0)
+    flag = (getenv("CCL_DEBUG_WX") != NULL);
+  return flag;
+}
 
 /* Resolve Darwin W^X PROTECTION_FAILURE without the unix signal path.
  * The signal_handler path depends on ESR in the synthetic mcontext; when
  * that is missing/zero we never UnProtect / mprotect(RX) and the same
  * page oscillates forever → beachball ("app not responding").
- * pc==far ⇒ instruction abort (need RX); else data abort into RX (need RW). */
+ * pc==far ⇒ instruction abort (need RX); else data abort into RX (need RW).
+ *
+ * Only the purified readonly_area is handled here: mprotect is
+ * process-wide, so fixing it up from the Mach exception thread works.
+ * MAP_JIT write-protection is per-thread (APRR); toggling
+ * pthread_jit_write_protect_np on this (server) thread would not change
+ * the faulting thread's state, so JIT faults are deliberately NOT fixed
+ * up here — all JIT stores must go through the same-thread C helpers
+ * (darwin_arm64_jit_install_code and friends), and a JIT WP fault falls
+ * through to signal_handler as a real error instead of looping. */
 static Boolean
 darwin_arm64_try_wx_fixup(natural pcval, natural far, Boolean nx)
 {
@@ -61,14 +79,10 @@ darwin_arm64_try_wx_fixup(natural pcval, natural far, Boolean nx)
       fflush(dbgout);
       return false;
     }
-    if (darwin_arm64_in_code_heap((void *)pcval)) {
-      pthread_jit_write_protect_np(1);
-      return true;
-    }
     return false;
   }
 
-  /* Data fault: write into RX purified / JIT code. */
+  /* Data fault: write into RX purified code. */
   if (readonly_area &&
       far >= (natural)readonly_area->low &&
       far < (natural)readonly_area->active) {
@@ -79,10 +93,6 @@ darwin_arm64_try_wx_fixup(natural pcval, natural far, Boolean nx)
             (unsigned long)(natural)page, errno);
     fflush(dbgout);
     return false;
-  }
-  if (darwin_arm64_in_code_heap((void *)far)) {
-    pthread_jit_write_protect_np(0);
-    return true;
   }
   return false;
 }
@@ -127,10 +137,23 @@ void fatal_mach_error(char *format, ...);
 /* Emergency scratch for signal frames when the faulting SP is already
  * in/near the OS or CCL stack guard.  Without this, setup_signal_frame's
  * memmove into the guard kills the Mach exception thread and the process
- * beachballs / SIGSEGVs with a useless secondary crash. */
+ * beachballs / SIGSEGVs with a useless secondary crash.
+ *
+ * Lifecycle: the flag is set when a frame is placed in the scratch buffer
+ * and cleared in do_pseudo_sigreturn when that frame's context is torn
+ * down.  A second deep fault while the buffer is occupied is fatal —
+ * aliasing the buffer would silently corrupt the first frame. */
 static uint8_t darwin_arm64_exc_frame_scratch[8192]
   __attribute__((aligned(16)));
 static int darwin_arm64_exc_frame_scratch_used = 0;
+
+static Boolean
+darwin_arm64_in_exc_scratch(natural addr)
+{
+  return (addr >= (natural)darwin_arm64_exc_frame_scratch &&
+          addr < ((natural)darwin_arm64_exc_frame_scratch
+                  + sizeof(darwin_arm64_exc_frame_scratch)));
+}
 
 static LispObj *
 find_foreign_sp(LispObj sp, area *foreign_area, TCR *tcr)
@@ -148,12 +171,15 @@ find_foreign_sp(LispObj sp, area *foreign_area, TCR *tcr)
   bsp = (BytePtr)((sp - C_REDZONE_LEN) & ~(LispObj)(C_STK_ALIGN - 1));
 
   /* If the frame would land at/below softlimit (or the area has no room),
-   * use the process-wide scratch buffer.  One concurrent deep fault only. */
+   * use the process-wide scratch buffer. */
   if ((natural)bsp < (natural)foreign_area->softlimit + need
-      || (natural)bsp < (natural)foreign_area->low + need
-      || darwin_arm64_exc_frame_scratch_used) {
-    if (!darwin_arm64_exc_frame_scratch_used) {
-      darwin_arm64_exc_frame_scratch_used = 1;
+      || (natural)bsp < (natural)foreign_area->low + need) {
+    if (darwin_arm64_exc_frame_scratch_used) {
+      Fatal("Mach exception",
+            "nested deep-stack exception frame: scratch buffer in use");
+    }
+    darwin_arm64_exc_frame_scratch_used = 1;
+    if (darwin_arm64_debug_wx()) {
       fprintf(dbgout,
               "\n[darwinarm64] signal frame: SP 0x%lx near/below softlimit "
               "0x%lx — using scratch\n",
@@ -227,6 +253,8 @@ do_pseudo_sigreturn(mach_port_t thread, TCR *tcr, native_thread_state_t *out)
     tcr->valence = TCR_STATE_LISP;
     if (fxs)
       tcr->last_lisp_frame = fxs->saved_last_lisp_frame;
+    if (darwin_arm64_in_exc_scratch((natural)xp))
+      darwin_arm64_exc_frame_scratch_used = 0;
     restore_mach_thread_state(thread, xp, out);
     if ((TCR_INTERRUPT_LEVEL(tcr) >= 0) && tcr->interrupt_pending)
       pthread_kill((pthread_t)(tcr->osid), SIGNAL_FOR_PROCESS_INTERRUPT);
@@ -247,6 +275,7 @@ create_thread_context_frame(mach_port_t thread,
   ExceptionInformation *pseudosigcontext;
   MCONTEXT_T mc;
   natural stackp;
+  kern_return_t kret;
 
   stackp = (LispObj)find_foreign_sp(ts->__sp, tcr->cs_area, tcr);
   stackp = TRUNC_DOWN(stackp, sizeof(siginfo_t), C_STK_ALIGN);
@@ -261,16 +290,18 @@ create_thread_context_frame(mach_port_t thread,
   memmove(&(mc->__ss), ts, sizeof(*ts));
 
   thread_state_count = NATIVE_FLOAT_STATE_COUNT;
-  thread_get_state(thread,
-                   NATIVE_FLOAT_STATE_FLAVOR,
-                   (thread_state_t)&(mc->__ns),
-                   &thread_state_count);
+  kret = thread_get_state(thread,
+                          NATIVE_FLOAT_STATE_FLAVOR,
+                          (thread_state_t)&(mc->__ns),
+                          &thread_state_count);
+  MACH_CHECK_ERROR("getting thread FP state", kret);
 
   thread_state_count = NATIVE_EXCEPTION_STATE_COUNT;
-  thread_get_state(thread,
-                   NATIVE_EXCEPTION_STATE_FLAVOR,
-                   (thread_state_t)&(mc->__es),
-                   &thread_state_count);
+  kret = thread_get_state(thread,
+                          NATIVE_EXCEPTION_STATE_FLAVOR,
+                          (thread_state_t)&(mc->__es),
+                          &thread_state_count);
+  MACH_CHECK_ERROR("getting thread exception state", kret);
 
   UC_MCONTEXT(pseudosigcontext) = mc;
   if (new_stack_top)
@@ -389,10 +420,10 @@ catch_mach_exception_raise_state(mach_port_t exception_port,
         Boolean nx = (pcval == far);
         static int wx_logs;
         if (darwin_arm64_try_wx_fixup(pcval, far, nx)) {
-          /* Successful fixups are normal MAP_JIT / purify traffic. Logging
-             them to dbgout launches AltConsole and looks like a fault.
-             Set CCL_DEBUG_WX=1 to keep the first few traces. */
-          if (wx_logs < 16 && getenv("CCL_DEBUG_WX")) {
+          /* Successful fixups are normal purify traffic.  Logging them to
+             dbgout launches AltConsole and looks like a fault.  Set
+             CCL_DEBUG_WX=1 to keep the first few traces. */
+          if (wx_logs < 16 && darwin_arm64_debug_wx()) {
             wx_logs++;
             fprintf(dbgout,
                     "[darwinarm64] W^X fixup #%d %s far=0x%lx pc=0x%lx\n",
@@ -405,105 +436,32 @@ catch_mach_exception_raise_state(mach_port_t exception_port,
           return KERN_SUCCESS;
         }
       }
-      {
+      /* Register/TCR summary for the first few faults; CCL_DEBUG_WX only.
+         Reads only thread state and TCR fields — never chases pointers
+         out of a possibly-corrupt image (that killed the exception server
+         during bring-up). */
+      if (darwin_arm64_debug_wx()) {
         static int bad_access_logs;
         if (bad_access_logs < 8) {
-          LispObj *cfp;
+          Dl_info di;
           bad_access_logs++;
-          {
-            Dl_info di, di2;
-            const char *pn = "?", *sn = "?", *pn2 = "?", *sn2 = "?";
-            unsigned long off = 0, off2 = 0;
-            if (dladdr((void *)(natural)ts->__pc, &di) && di.dli_fname) {
-              pn = di.dli_fname;
-              sn = di.dli_sname ? di.dli_sname : "?";
-              off = (unsigned long)((natural)ts->__pc - (natural)di.dli_saddr);
-            }
-            if (dladdr((void *)(natural)ts->__lr, &di2) && di2.dli_fname) {
-              pn2 = di2.dli_fname;
-              sn2 = di2.dli_sname ? di2.dli_sname : "?";
-              off2 = (unsigned long)((natural)ts->__lr - (natural)di2.dli_saddr);
-            }
-            fprintf(dbgout,
-                    "  pc_sym=%s+%lu in %s\n  lr_sym=%s+%lu in %s\n",
-                    sn, off, pn, sn2, off2, pn2);
+          if (dladdr((void *)(natural)ts->__pc, &di) && di.dli_fname) {
+            fprintf(dbgout, "  pc_sym=%s+%lu in %s\n",
+                    di.dli_sname ? di.dli_sname : "?",
+                    (unsigned long)((natural)ts->__pc - (natural)di.dli_saddr),
+                    di.dli_fname);
           }
           fprintf(dbgout,
                   "\n[darwinarm64] EXC_BAD_ACCESS #%d code0=%lld "
-                  "pc=0x%llx lr=0x%llx sp=0x%llx "
-                  "far=0x%llx cs=[0x%lx,0x%lx) soft=0x%lx\n"
-                  "  x0=%llx x1=%llx x2=%llx x12=%llx x24(tsp)=%llx "
-                  "x25(vsp)=%llx x28=%llx\n"
-                  "  tcr=%llx x28%stcr db_link=%llx catch_top=%llx "
-                  "valence=%d save_vsp=%llx save_tsp=%llx\n",
+                  "pc=0x%llx lr=0x%llx sp=0x%llx far=0x%llx "
+                  "tcr=%llx valence=%d\n",
                   bad_access_logs, (long long)code0,
                   (unsigned long long)ts->__pc,
                   (unsigned long long)ts->__lr,
                   (unsigned long long)ts->__sp,
                   (unsigned long long)(code_count > 1 ? code[1] : 0),
-                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->low : 0),
-                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->high : 0),
-                  (unsigned long)(natural)(tcr->cs_area ? tcr->cs_area->softlimit : 0),
-                  (unsigned long long)ts->__x[0],
-                  (unsigned long long)ts->__x[1],
-                  (unsigned long long)ts->__x[2],
-                  (unsigned long long)ts->__x[12],
-                  (unsigned long long)ts->__x[24],
-                  (unsigned long long)ts->__x[25],
-                  (unsigned long long)ts->__x[28],
                   (unsigned long long)(natural)tcr,
-                  ((natural)ts->__x[28] == (natural)tcr) ? "==" : "!=",
-                  (unsigned long long)(natural)tcr->db_link,
-                  (unsigned long long)(natural)tcr->catch_top,
-                  (int)tcr->valence,
-                  (unsigned long long)(natural)tcr->save_vsp,
-                  (unsigned long long)(natural)tcr->save_tsp);
-          /* catch_frame fields are at misc-biased byte offsets (ldur/stur). */
-          cfp = (LispObj *)(natural)tcr->catch_top;
-          if (cfp) {
-            char *cp = (char *)cfp;
-            fprintf(dbgout,
-                    "  catch_bytes: hdr=%llx tag=%llx link=%llx mv=%llx "
-                    "csp=%llx db=%llx xframe=%llx nfp=%llx\n",
-                    (unsigned long long)*(LispObj *)(cp - 12),
-                    (unsigned long long)*(LispObj *)(cp - 4),
-                    (unsigned long long)*(LispObj *)(cp + 4),
-                    (unsigned long long)*(LispObj *)(cp + 0xc),
-                    (unsigned long long)*(LispObj *)(cp + 0x14),
-                    (unsigned long long)*(LispObj *)(cp + 0x1c),
-                    (unsigned long long)*(LispObj *)(cp + 0x44),
-                    (unsigned long long)*(LispObj *)(cp + 0x4c));
-          }
-          /* Frame in x12 (nthrowvalues temp0) + binding chain head. */
-          {
-            char *xf = (char *)(natural)ts->__x[12];
-            natural dbl = (natural)tcr->db_link;
-            int i;
-            if (xf) {
-              fprintf(dbgout,
-                      "  x12_catch: hdr=%llx tag=%llx link=%llx db=%llx "
-                      "csp=%llx\n",
-                      (unsigned long long)*(LispObj *)(xf - 12),
-                      (unsigned long long)*(LispObj *)(xf - 4),
-                      (unsigned long long)*(LispObj *)(xf + 4),
-                      (unsigned long long)*(LispObj *)(xf + 0x1c),
-                      (unsigned long long)*(LispObj *)(xf + 0x14));
-            }
-            fprintf(dbgout, "  bindings from tcr.db_link:");
-            for (i = 0; i < 6 && dbl; i++) {
-              natural *b = (natural *)dbl;
-              fprintf(dbgout, "\n    [%d] %lx link=%lx sym=%lx val=%lx",
-                      i, (unsigned long)dbl,
-                      (unsigned long)b[0],
-                      (unsigned long)b[1],
-                      (unsigned long)b[2]);
-              if (dbl == (natural)ts->__x[0])
-                fprintf(dbgout, "  <-- TARGET");
-              dbl = b[0];
-              if (dbl < 0x1000) break;
-            }
-            fprintf(dbgout, "\n");
-          }
+                  (int)tcr->valence);
           fflush(dbgout);
         }
       }
