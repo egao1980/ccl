@@ -65,12 +65,11 @@ have been removed.
 
 ## Follow-ups
 
-- Verify the stock-built Clozure CL64.app (`(require :cocoa-application)`)
-  creates its untitled Listener window — the build completes and the
-  restarted image runs its event loop with live menus/callbacks, but
-  window materialization could not be confirmed in an unattended
-  session (screen locked).  A stock-built image is staged at
-  `Clozure CL64.app/Contents/Resources/ccl/darm64cl.image.stock-build`.
+- Stock-built Clozure CL64.app (`(require :cocoa-application)`) verified
+  interactively on an unlocked session: untitled Listener opens
+  automatically, `(+ 1 2)` evaluates to `3`, Cmd+Shift+N opens a second
+  Listener, and menus remain live.  Both `~/ccl-init.lisp` and
+  `~/ccl-ide-init.lisp` were absent: no live patches or local init hacks.
 - Upstream Clozure merge: reviewable PR against `Clozure/ccl` `arm64` with Darwin CI notes.
 
 See also: `doc/porting/darwin.md`, `tools/PR-darwinarm64.md`.
