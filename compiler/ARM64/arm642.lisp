@@ -3589,75 +3589,36 @@
                       (or (arm64-side-effect-free-form-p cform)
                           (let ((cvar (arm642-lexical-reference-p cform)))
                             (and cvar
-                                 (nx2-var-not-set-by-form-p cvar dform)))))))
-    (cond (atriv
-           (arm642-one-targeted-reg-form seg bform breg)
-           (arm642-one-targeted-reg-form seg cform creg)
-           (arm642-one-targeted-reg-form seg dform dreg)
-           (arm642-one-targeted-reg-form seg aform areg))
-          (aconst
-           (cond (btriv
-                  (arm642-one-targeted-reg-form seg cform creg)
-                  (arm642-one-targeted-reg-form seg dform dreg)
-                  (arm642-one-targeted-reg-form seg bform breg))
-                 (bconst
-                  (cond (ctriv
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (cconst
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (t
-                         (arm642-push-register seg (arm642-one-untargeted-reg-form seg cform creg))
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-pop-register seg creg)))
-                  (arm642-one-targeted-reg-form seg bform breg))
-                 (t
-                  (arm642-push-register seg (arm642-one-untargeted-reg-form seg bform breg))
-                  (cond (ctriv
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (cconst
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (t
-                         (arm642-push-register seg (arm642-one-untargeted-reg-form seg cform creg))
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-pop-register seg creg)))
-                  (arm642-pop-register seg breg)))
-           (arm642-one-targeted-reg-form seg aform areg))
-          (t
-           (arm642-push-register seg (arm642-one-untargeted-reg-form seg aform areg))
-           (cond (btriv
-                  (arm642-one-targeted-reg-form seg cform creg)
-                  (arm642-one-targeted-reg-form seg dform dreg)
-                  (arm642-one-targeted-reg-form seg bform breg))
-                 (bconst
-                  (cond (ctriv
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (cconst
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (t
-                         (arm642-push-register seg (arm642-one-untargeted-reg-form seg cform creg))
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-pop-register seg creg)))
-                  (arm642-one-targeted-reg-form seg bform breg))
-                 (t
-                  (arm642-push-register seg (arm642-one-untargeted-reg-form seg bform breg))
-                  (cond (ctriv
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (cconst
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-one-targeted-reg-form seg cform creg))
-                        (t
-                         (arm642-push-register seg (arm642-one-untargeted-reg-form seg cform creg))
-                         (arm642-one-targeted-reg-form seg dform dreg)
-                         (arm642-pop-register seg creg)))
-                  (arm642-pop-register seg breg)))
-           (arm642-pop-register seg areg)))))
+                                 (nx2-var-not-set-by-form-p cvar dform))))))
+         (apushed nil)
+         (bpushed nil)
+         (cpushed nil))
+    (if (and aform (not aconst))
+      (if atriv
+        (arm642-one-targeted-reg-form seg aform areg)
+        (setq apushed (arm642-push-reg-for-form seg aform areg t))))
+    (if (and bform (not bconst))
+      (if btriv
+        (arm642-one-targeted-reg-form seg bform breg)
+        (setq bpushed (arm642-push-reg-for-form seg bform breg t))))
+    (if (and cform (not cconst))
+      (if ctriv
+        (arm642-one-targeted-reg-form seg cform creg)
+        (setq cpushed (arm642-push-reg-for-form seg cform creg t))))
+    (arm642-one-targeted-reg-form seg dform dreg)
+    (unless ctriv
+      (if cconst
+        (arm642-one-targeted-reg-form seg cform creg)
+        (arm642-elide-pushes seg cpushed (arm642-pop-register seg creg))))
+    (unless btriv
+      (if bconst
+        (arm642-one-targeted-reg-form seg bform breg)
+        (arm642-elide-pushes seg bpushed (arm642-pop-register seg breg))))
+    (unless atriv
+      (if aconst
+        (arm642-one-targeted-reg-form seg aform areg)
+        (arm642-elide-pushes seg apushed (arm642-pop-register seg areg))))
+    (values areg breg creg dreg)))
 
 (defun arm642-three-targeted-reg-forms (seg aform areg bform breg cform creg)
   (let* ((*arm642-nfp-depth* *arm642-nfp-depth*)
@@ -9071,416 +9032,303 @@
 ;;;   [header]                     u64-vector header (frame base = SP)
 ;;;   [prevsp]                     element 0 (saved previous SP)
 ;;;   [GP save: 8 words, X0..X7]   <- .SPffcall loads all 8 unconditionally
-;;;   [FP save: 8 words, D0..D7]   <- p2 reloads V0..V(nfpr-1) inline
-;;;   [stack args: M words]        <- SP points here at the blr; arg0 lowest
-;;;   [reserved lisp frame: 4]     tcr.last_lisp_frame; above the call-time SP
+;;;   [stack args: M words]        <- the AAPCS64 NSAA area; SP points here
+;;;                                   at the blr (frame base + 80).  One
+;;;                                   8-byte slot per overflow arg of EITHER
+;;;                                   class, assigned in SOURCE ORDER (one
+;;;                                   NSAA, 5.4.2 stage C -- integer and FP
+;;;                                   overflow interleave; C.5 widens a
+;;;                                   single-float to a full slot, value in
+;;;                                   the low 4 bytes).  Arg 9 lowest.
+;;;   [FP staging: variable]       <- singles, then even-word-aligned
+;;;                                   doubles; p2 reloads d0..d(n-1) from
+;;;                                   here just before the call.  A private
+;;;                                   scratch area the callee never sees;
+;;;                                   it sits ABOVE the stack args.
+;;;   [reserved lisp frame: 4]     the boundary lisp_frame, directly below
+;;;                                   the saved previous SP
 ;;;
-;;; The arg area (GP save, FP save, stack args) begins at SP+dnode-size
-;;; (after header+prevsp); set-aapcs64-c-arg indexes it in words from there.
-;;; The GP and FP save areas are a fixed 8 words each, so every region has a
-;;; constant offset and .SPffcall is branch-free.  A value stored into an
-;;; unused save slot is harmless: the callee reads only the registers its
-;;; prototype names, and the p2 never reloads unused FP slots.
+;;; The arg area (GP save, stack args, FP staging) begins at SP+dnode-size
+;;; (after header+prevsp); set-c-arg and friends index it in 8-byte words
+;;; from there.  The GP save area is a fixed 8 words and the NSAA block
+;;; starts at arg-area word 8 = frame byte 80 = c_frame.size + 8*node_size,
+;;; which is exactly the constant .SPffcall steps SP by at the blr, so
+;;; .SPffcall stays branch-free.  A value stored into an unused save slot
+;;; is harmless: the callee reads only the registers its prototype names
+;;; and the stack slots its prototype implies, and the p2 never reloads
+;;; unused FP slots.
 ;;;
 ;;; .SPffcall must be FP-clean between entry and the blr, so the FP args the
 ;;; p2 loaded into V0..V(nfpr-1) survive the stack switch.
 ;;;
-;;; One code path serves Darwin and Linux for the c_frame layout.
-;;; Darwin policy (Apple ABI):
-;;;   * `:variadic' sentinel → following args are 8-byte stack slots
-;;;   * non-variadic overflow → natural-size packing (1/2/4/8), not
-;;;     AAPCS64's 8-byte slots.  Linux ignores both and always uses
-;;;     8-byte overflow slots.
-(defun arm642-aapcs64-stack-arg-bytes (argspec)
-  (case argspec
-    ((:signed-byte :unsigned-byte) 1)
-    ((:signed-halfword :unsigned-halfword) 2)
-    ((:signed-fullword :unsigned-fullword :single-float) 4)
-    (t 8)))
-
-(defun arm642-align-up (n alignment)
-  (declare (fixnum n alignment))
-  (logandc2 (the fixnum (+ n (the fixnum (1- alignment))))
-            (the fixnum (1- alignment))))
-
+;;; One code path serves Darwin and Linux: the layout is identical, and the
+;;; Darwin divergences (variadic args forced to the stack; natural-size stack
+;;; packing) are handled as target-os policy in the register-vs-stack
+;;; assignment below, not as a separate variant.
 (defarm642 arm642-aapcs64-ff-call aapcs64-ff-call (seg vreg xfer address argspecs argvals resultspec &optional monitor)
   (declare (ignore monitor))
   (let* ((*arm642-vstack* *arm642-vstack*)
          (*arm642-cstack* *arm642-cstack*)
          (pre-frame-cstack *arm642-cstack*) ;restored after (! ff-call): see below
          (gpr-offset 0)
-         (other-offset 8)              ; word index from param0 (8-byte slots)
-         (other-byte-offset 64)        ; byte index from param0 (Darwin pack)
+         (other-offset 8)
          (single-float-offset 8)
          (double-float-offset 8)
          (nsingle-floats 0)             ; F
          (ndouble-floats 0)             ; D
          (nother-words 0)
-         (overflow-bytes 0)
          (nfpr-args 0)
          (ngpr-args 0)
-         (fp-loads ())
-         (force-stack nil)
          (return-registers nil)
-         (structure-return nil)
-         (darwin-os-p (eq (backend-target-os *target-backend*) :darwinarm64)))
+         (indirect-result nil)
+         (fp-loads ()))
     (declare (fixnum nsingle-floats ndouble-floats nfpr-args ngpr-args
-                     nother-words overflow-bytes gpr-offset other-offset
-                     other-byte-offset single-float-offset double-float-offset))
-    (labels ((note-overflow (argspec)
-               (if (and darwin-os-p (not force-stack))
-                 (let* ((sz (arm642-aapcs64-stack-arg-bytes argspec)))
-                   (setq overflow-bytes
-                         (+ (arm642-align-up overflow-bytes sz) sz)))
-                 (incf nother-words)))
-             (note-overflow-composite (nbytes align)
-               ;; Whole-composite stack copy: aligned start, natural packing.
-               (if (and darwin-os-p (not force-stack))
-                 (setq overflow-bytes
-                       (+ (arm642-align-up overflow-bytes align) nbytes))
-                 (incf nother-words (ceiling nbytes 8))))
-             (store-overflow-gpr (reg argspec)
-               (if (and darwin-os-p (not force-stack))
-                 (let* ((sz (arm642-aapcs64-stack-arg-bytes argspec))
-                        (off (arm642-align-up other-byte-offset sz)))
-                   (ecase sz
-                     (1 (! set-c-arg-byte reg off))
-                     (2 (! set-c-arg-halfword reg off))
-                     (4 (! set-c-arg-fullword reg off))
-                     (8 (! set-c-arg-doubleword-bytes reg off)))
-                   (setq other-byte-offset (+ off sz)))
-                 (progn
-                   (! set-c-arg reg other-offset)
-                   (incf other-offset))))
-             (store-overflow-fpr (freg argspec)
-               (if (and darwin-os-p (not force-stack))
-                 (let* ((sz (arm642-aapcs64-stack-arg-bytes argspec))
-                        (off (arm642-align-up other-byte-offset sz)))
-                   (if (eq argspec :double-float)
-                     (! set-double-c-arg-bytes freg off)
-                     (! set-single-c-arg-bytes freg off))
-                   (setq other-byte-offset (+ off sz)))
-                 (progn
-                   (if (eq argspec :double-float)
-                     (! set-double-c-arg freg other-offset)
-                     (! set-single-c-arg freg other-offset))
-                   (incf other-offset)))))
-      ;; Pass 1: count slots per class.
-      (dolist (argspec argspecs)
-        (cond ((eq argspec :variadic)
-               (when darwin-os-p
-                 ;; Fixed stack args (if any) end; variadic is 8-byte slots.
-                 (incf nother-words (ash (+ overflow-bytes 7) -3))
-                 (setq overflow-bytes 0)
-                 (setq force-stack t)))
-              ((eq argspec :registers)
-               (setq return-registers t))
-              ((eq argspec :structure-return)
-               (setq structure-return t))
-              ;; HFA (rep . count): one atomic composite.  AAPCS64 C.3:
-              ;; either every field gets an FPR or the whole aggregate is
-              ;; copied to the stack and NSRN is set to 8 — never split.
-              ((consp argspec)
-               (let* ((rep (car argspec))
-                      (count (cdr argspec))
-                      (fsize (if (eq rep :double-float) 8 4)))
-                 (declare (fixnum count fsize))
-                 (cond (force-stack
-                        (incf nother-words (ceiling (* count fsize) 8)))
-                       ((> (the fixnum (+ nfpr-args count)) 8)
-                        (setq nfpr-args 8)
-                        (note-overflow-composite (* count fsize) fsize))
-                       (t
-                        (incf nfpr-args count)
-                        (if (eq rep :double-float)
-                          (incf ndouble-floats count)
-                          (incf nsingle-floats count))))))
-              ((or (eq argspec :double-float) (eq argspec :single-float))
-               (cond (force-stack
-                      (note-overflow argspec))
-                     ((>= nfpr-args 8)
-                      (note-overflow argspec))
+                     nother-words gpr-offset other-offset
+                     single-float-offset double-float-offset))
+    ;; Pass 1: count slots per class.  AAPCS64: first 8 GPR-class args
+    ;; in x0-x7 (a 64-bit integer is ONE slot -- v2 s86 lesson), first
+    ;; 8 FP-class in d0-d7, rest overflow to the stack.
+    (dolist (argspec argspecs)
+      (case argspec
+        ((:double-float :single-float)
+         (incf nfpr-args)
+         (if (<= nfpr-args 8)
+           (if (eq argspec :double-float)
+             (incf ndouble-floats)
+             (incf nsingle-floats))
+           ;; AAPCS64 5.4.2 stage C: once v0-v7 are exhausted (C.1
+           ;; fails), an FP arg is copied to the stack at the NSAA --
+           ;; the SAME next-stacked-argument address integer overflow
+           ;; uses, advancing in source order; C.5 widens half/single
+           ;; precision to one full 8-byte slot.  ONE NSAA, not a
+           ;; per-class block, so this shares nother-words with the
+           ;; integer arm below, and pass 2 reproduces the identical
+           ;; decision (same counter, same threshold, same order).
+           (incf nother-words)))
+        ;; Return-registers buffer (record-by-value returns): a macptr
+        ;; handed to .SPffcall-return-registers in arg_y; consumes no
+        ;; C argument slot (x862.lisp is the donor shape).
+        (:registers (setq return-registers t))
+        ;; Indirect-result buffer (>16-byte non-HFA record returns): a
+        ;; macptr handed to .SPffcall-indirect-result in arg_y, whose
+        ;; ADDRESS the subprim loads into x8 before the call (AAPCS64
+        ;; 6.9 indirect result-area register); consumes no C slot.
+        ;; Duplicate check HERE, not only in nx1: on a cross host whose
+        ;; nx1 predates the keyword it arrives through the generic
+        ;; *arg-spec-keywords* arm (see lib/ffi-linuxarm64.lisp), which
+        ;; has no duplicate check -- and a second one would vpush a
+        ;; second buffer that the single vpop below never pops.
+        (:indirect-result
+         (when indirect-result
+           (compiler-bug "aapcs64-ff-call: duplicate :indirect-result"))
+         (setq indirect-result t))
+        ;; One raw 8-byte NSAA word -- one slot of a C.13 memory copy of
+        ;; a composite the ABI sends WHOLLY to the stack (emitted by
+        ;; expand-ff-call, which also burns the corresponding register
+        ;; class per C.3/C.11).  Always a stack slot; consumes no
+        ;; register of either class.
+        (:stack-doubleword (incf nother-words))
+        (t (incf ngpr-args)
+           (if (> ngpr-args 8)
+             (incf nother-words)))))
+    (let* ((single-words (+ 8 nother-words nsingle-floats))
+           (total-words (if (zerop ndouble-floats)
+                          single-words
+                          (+ (the fixnum (+ ndouble-floats ndouble-floats))
+                             (the fixnum (logand (lognot 1)
+                                                 (the fixnum (1+ single-words))))))))
+      (declare (fixnum single-words total-words))
+      (when (> total-words 490)         ;alloc-c-frame SUB imm12 reach
+        (compiler-bug "aapcs64-ff-call: c-frame too large (~s words)"
+                      total-words))
+      (setq single-float-offset (+ other-offset nother-words))
+      (setq double-float-offset
+            (logand (lognot 1)
+                    (the fixnum (1+ (the fixnum (+ single-float-offset
+                                                   nsingle-floats))))))
+      (! alloc-c-frame total-words)
+      ;; Nonlocal exits crossing this point pop the frame via his
+      ;; generic cstack-diff adjust-sp (header note).
+      (setq *arm642-cstack*
+            (+ *arm642-cstack*
+               (+ arm64::c-frame.minsize
+                  (ash (logand -2 (1+ total-words)) 3)))))
+    (setq ngpr-args 0 nfpr-args 0)
+    (arm642-vpush-register seg (arm642-one-untargeted-reg-form
+                                seg address arm64::arg_z))
+    ;; Pass 2: evaluate each arg form into its frame slot.  FP args
+    ;; remember (kind . offset) so d0-d7 can be loaded after the last
+    ;; form (arbitrary lisp code in later forms would clobber them).
+    (do* ((specs argspecs (cdr specs))
+          (vals argvals (cdr vals)))
+         ((null specs))
+      (declare (list specs vals))
+      (let* ((valform (car vals))
+             (spec (car specs))
+             (absptr (acode-absolute-ptr-p valform)))
+        (case spec
+          ;; Return-registers / indirect-result buffer: evaluate the
+          ;; macptr and park it on the vstack; it is popped into arg_y
+          ;; just before the call (LIFO with the address pushed above).
+          ;; Donor: x862.lisp's (:registers ...) arm.
+          ((:registers :indirect-result)
+           (let* ((reg (arm642-one-untargeted-reg-form
+                        seg valform arm64::arg_z)))
+             (unless *arm642-reckless*
+               (! trap-unless-macptr reg))
+             (arm642-vpush-register seg reg)))
+          ;; FPR regspecs are raw FPR numbers under :class :fpr (his
+          ;; arm642-immediate idiom); no dN name constants in his arch.
+          ;; Staging register d1 mirrors the v2 donor's fp1 choice.
+          ;;
+          ;; FP args 1-8 go to staging slots and are reloaded into d0-d7
+          ;; after the last form (arbitrary lisp code in a later form
+          ;; would clobber them).  FP args 9+ go straight into their NSAA
+          ;; stack slot NOW: the callee reads them from MEMORY, so there
+          ;; is no register load to defer, and the shared other-offset
+          ;; counter is what interleaves them with overflowing integer
+          ;; args in source order (AAPCS64 5.4.2: one NSAA for both
+          ;; classes -- pass 1 counted these same slots into
+          ;; nother-words).
+          (:double-float
+           (let* ((df ($ 1 :class :fpr :mode :double-float)))
+             (incf nfpr-args)
+             (arm642-one-targeted-reg-form seg valform df)
+             (cond ((<= nfpr-args 8)
+                    (! set-double-c-arg df double-float-offset)
+                    (push (cons :double-float double-float-offset) fp-loads)
+                    (incf double-float-offset 2))
+                   (t
+                    (! set-double-c-arg df other-offset)
+                    (incf other-offset)))))
+          (:single-float
+           (let* ((sf ($ 1 :class :fpr :mode :single-float)))
+             (incf nfpr-args)
+             (arm642-one-targeted-reg-form seg valform sf)
+             (cond ((<= nfpr-args 8)
+                    (! set-single-c-arg sf single-float-offset)
+                    (push (cons :single-float single-float-offset) fp-loads)
+                    (incf single-float-offset))
+                   (t
+                    ;; C.5: a stacked single occupies a full 8-byte
+                    ;; slot with the value in its low 4 bytes; a
+                    ;; little-endian 32-bit str at the slot base does
+                    ;; exactly that.
+                    (! set-single-c-arg sf other-offset)
+                    (incf other-offset)))))
+          ;; 64-bit integer: full value in imm0 via gets64/getu64
+          ;; (w10), ONE GPR slot (v2 s86 AAPCS64 deviation kept).
+          ((:signed-doubleword :unsigned-doubleword)
+           (arm642-one-targeted-reg-form seg valform ($ arm64::arg_z))
+           (if (eq spec :signed-doubleword)
+             (! gets64)
+             (! getu64))
+           (incf ngpr-args)
+           (cond ((<= ngpr-args 8)
+                  (! set-c-arg ($ arm64::imm0) gpr-offset)
+                  (incf gpr-offset))
+                 (t
+                  (! set-c-arg ($ arm64::imm0) other-offset)
+                  (incf other-offset))))
+          ;; Raw NSAA word (C.13 whole-composite stack copy; see the
+          ;; pass-1 arm and expand-ff-call).  Same u64 value path as
+          ;; :unsigned-doubleword, but the slot is unconditionally a
+          ;; stack slot and no register-class counter moves.
+          (:stack-doubleword
+           (arm642-one-targeted-reg-form seg valform ($ arm64::arg_z))
+           (! getu64)
+           (! set-c-arg ($ arm64::imm0) other-offset)
+           (incf other-offset))
+          (:address
+           (with-imm-target () (ptr :address)
+             (if absptr
+               (arm642-lri seg ptr absptr)
+               (arm642-form seg ptr nil valform))
+             (incf ngpr-args)
+             (cond ((<= ngpr-args 8)
+                    (! set-c-arg ptr gpr-offset)
+                    (incf gpr-offset))
+                   (t
+                    (! set-c-arg ptr other-offset)
+                    (incf other-offset)))))
+          (t
+           (with-imm-target () (valreg :natural)
+             (let* ((reg (arm642-unboxed-integer-arg-to-reg
+                          seg valform valreg spec)))
+               (incf ngpr-args)
+               (cond ((<= ngpr-args 8)
+                      (! set-c-arg reg gpr-offset)
+                      (incf gpr-offset))
                      (t
-                      (incf nfpr-args)
-                      (if (eq argspec :double-float)
-                        (incf ndouble-floats)
-                        (incf nsingle-floats)))))
-              ;; N-word composite (expand-ff-call, 64<bits<=128): one atomic
-              ;; argument.  AAPCS64 C.12: if it doesn't fit in the remaining
-              ;; GPRs, the whole composite goes to the stack and NGRN is set
-              ;; to 8 — never split between x7 and the stack.
-              ((typep argspec 'unsigned-byte)
-               (cond (force-stack
-                      (dotimes (i argspec)
-                        (declare (ignore i))
-                        (note-overflow :unsigned-doubleword)))
-                     ((> (the fixnum (+ ngpr-args argspec)) 8)
-                      (setq ngpr-args 8)
-                      (note-overflow-composite (ash argspec 3) 8))
-                     (t
-                      (incf ngpr-args argspec))))
-              (t
-               (cond (force-stack
-                      (note-overflow argspec))
-                     (t
-                      (incf ngpr-args)
-                      (when (> ngpr-args 8)
-                        (note-overflow argspec)))))))
-      (incf nother-words (ash (+ overflow-bytes 7) -3))
-      (let* ((single-words (+ 8 nother-words nsingle-floats))
-             (total-words (if (zerop ndouble-floats)
-                            single-words
-                            (+ (the fixnum (+ ndouble-floats ndouble-floats))
-                               (the fixnum (logand (lognot 1)
-                                                   (the fixnum (1+ single-words))))))))
-        (declare (fixnum single-words total-words))
-        (when (> total-words 490)         ;alloc-c-frame SUB imm12 reach
-          (compiler-bug "aapcs64-ff-call: c-frame too large (~s words)"
-                        total-words))
-        (setq single-float-offset (+ other-offset nother-words))
-        (setq double-float-offset
-              (logand (lognot 1)
-                      (the fixnum (1+ (the fixnum (+ single-float-offset
-                                                     nsingle-floats))))))
-        (! alloc-c-frame total-words)
-        (setq *arm642-cstack*
-              (+ *arm642-cstack*
-                 (+ arm64::c-frame.minsize
-                    (ash (logand -2 (1+ total-words)) 3)))))
-      (setq ngpr-args 0 nfpr-args 0 force-stack nil
-            other-offset 8 other-byte-offset 64 overflow-bytes 0)
-      (arm642-vpush-register seg (arm642-one-untargeted-reg-form
-                                  seg address arm64::arg_z))
-      ;; Pass 2: evaluate each arg form into its frame slot.
-      (do* ((specs argspecs (cdr specs))
-            (vals argvals (cdr vals)))
-           ((null specs))
-        (declare (list specs vals))
-        (let* ((valform (car vals))
-               (spec (car specs))
-               (absptr (acode-absolute-ptr-p valform)))
-          (cond ((eq spec :variadic)
-                 (when darwin-os-p
-                   (setq other-byte-offset
-                         (arm642-align-up other-byte-offset 8))
-                   (setq other-offset (ash other-byte-offset -3))
-                   (setq force-stack t)))
-                ((eq spec :registers)
-                 (let* ((reg (arm642-one-untargeted-reg-form
-                              seg valform arm64::arg_z)))
-                   (unless *arm642-reckless*
-                     (! trap-unless-macptr reg))
-                   (arm642-vpush-register seg reg)))
-                ((eq spec :structure-return)
-                 (let* ((reg (arm642-one-untargeted-reg-form
-                              seg valform arm64::arg_z)))
-                   (unless *arm642-reckless*
-                     (! trap-unless-macptr reg))
-                   (arm642-vpush-register seg reg)))
-                ;; HFA (rep . count): fields loaded from the composite's
-                ;; address into consecutive FPR staging slots, or the whole
-                ;; aggregate copied to the stack (mirrors pass 1 exactly).
-                ((consp spec)
-                 (let* ((rep (car spec))
-                        (count (cdr spec))
-                        (double-p (eq rep :double-float))
-                        (fsize (if double-p 8 4)))
-                   (declare (fixnum count fsize))
-                   (with-imm-target () (ptr :address)
-                     (arm642-one-targeted-reg-form seg valform ptr)
-                     (let* ((fp (if double-p
-                                  ($ 1 :class :fpr :mode :double-float)
-                                  ($ 1 :class :fpr :mode :single-float))))
-                       (cond (force-stack
-                              ;; Darwin variadic: composite copied into
-                              ;; 8-byte-aligned stack slots.
-                              (let* ((base (ash other-offset 3)))
-                                (dotimes (i count)
-                                  (if double-p
-                                    (progn
-                                      (! mem-ref-c-double-float fp ptr (* i 8))
-                                      (! set-double-c-arg-bytes fp (+ base (* i 8))))
-                                    (progn
-                                      (! mem-ref-c-single-float fp ptr (* i 4))
-                                      (! set-single-c-arg-bytes fp (+ base (* i 4))))))
-                                (incf other-offset (ceiling (* count fsize) 8))))
-                             ((> (the fixnum (+ nfpr-args count)) 8)
-                              (setq nfpr-args 8)
-                              (if darwin-os-p
-                                (dotimes (i count)
-                                  (let* ((off (arm642-align-up other-byte-offset fsize)))
-                                    (if double-p
-                                      (progn
-                                        (! mem-ref-c-double-float fp ptr (* i 8))
-                                        (! set-double-c-arg-bytes fp off))
-                                      (progn
-                                        (! mem-ref-c-single-float fp ptr (* i 4))
-                                        (! set-single-c-arg-bytes fp off)))
-                                    (setq other-byte-offset (+ off fsize))))
-                                (let* ((base (ash other-offset 3)))
-                                  (dotimes (i count)
-                                    (if double-p
-                                      (progn
-                                        (! mem-ref-c-double-float fp ptr (* i 8))
-                                        (! set-double-c-arg-bytes fp (+ base (* i 8))))
-                                      (progn
-                                        (! mem-ref-c-single-float fp ptr (* i 4))
-                                        (! set-single-c-arg-bytes fp (+ base (* i 4))))))
-                                  (incf other-offset (ceiling (* count fsize) 8)))))
-                             (t
-                              (dotimes (i count)
-                                (if double-p
-                                  (progn
-                                    (! mem-ref-c-double-float fp ptr (* i 8))
-                                    (! set-double-c-arg fp double-float-offset)
-                                    (push (cons :double-float double-float-offset)
-                                          fp-loads)
-                                    (incf double-float-offset 2))
-                                  (progn
-                                    (! mem-ref-c-single-float fp ptr (* i 4))
-                                    (! set-single-c-arg fp single-float-offset)
-                                    (push (cons :single-float single-float-offset)
-                                          fp-loads)
-                                    (incf single-float-offset))))
-                              (incf nfpr-args count)))))))
-                ((eq spec :double-float)
-                 (let* ((df ($ 1 :class :fpr :mode :double-float)))
-                   (arm642-one-targeted-reg-form seg valform df)
-                   (cond ((or force-stack (>= nfpr-args 8))
-                          (store-overflow-fpr df :double-float))
-                         (t
-                          (incf nfpr-args)
-                          (! set-double-c-arg df double-float-offset)
-                          (push (cons :double-float double-float-offset) fp-loads)
-                          (incf double-float-offset 2)))))
-                ((eq spec :single-float)
-                 (let* ((sf ($ 1 :class :fpr :mode :single-float)))
-                   (arm642-one-targeted-reg-form seg valform sf)
-                   (cond ((or force-stack (>= nfpr-args 8))
-                          (store-overflow-fpr sf :single-float))
-                         (t
-                          (incf nfpr-args)
-                          (! set-single-c-arg sf single-float-offset)
-                          (push (cons :single-float single-float-offset) fp-loads)
-                          (incf single-float-offset)))))
-                ((or (eq spec :signed-doubleword) (eq spec :unsigned-doubleword))
-                 (arm642-one-targeted-reg-form seg valform ($ arm64::arg_z))
-                 (if (eq spec :signed-doubleword)
-                   (! gets64)
-                   (! getu64))
-                 (cond (force-stack
-                        (store-overflow-gpr ($ arm64::imm0) spec))
-                       (t
-                        (incf ngpr-args)
-                        (cond ((<= ngpr-args 8)
-                               (! set-c-arg ($ arm64::imm0) gpr-offset)
-                               (incf gpr-offset))
-                              (t
-                               (store-overflow-gpr ($ arm64::imm0) spec))))))
-                ((eq spec :address)
-                 (with-imm-target () (ptr :address)
-                   (if absptr
-                     (arm642-lri seg ptr absptr)
-                     (arm642-form seg ptr nil valform))
-                   (cond (force-stack
-                          (store-overflow-gpr ptr spec))
-                         (t
-                          (incf ngpr-args)
-                          (cond ((<= ngpr-args 8)
-                                 (! set-c-arg ptr gpr-offset)
-                                 (incf gpr-offset))
-                                (t
-                                 (store-overflow-gpr ptr spec)))))))
-                ;; N-word composite (unsigned-byte argspec): load N
-                ;; consecutive doublewords from the macptr into consecutive
-                ;; GPRs, or copy the whole composite to the stack — one
-                ;; atomic argument, mirroring pass 1 (AAPCS64 C.12).
-                ;; Match x8664: evaluate the macptr form straight into an
-                ;; :address temp (one-targeted does trap-unless-macptr +
-                ;; deref).  Evaluating into arg_z then deref-macptr was
-                ;; ASLR-flaky on Darwin (wrong pointer stable within a
-                ;; process).
-                ((typep spec 'unsigned-byte)
-                 (with-imm-target () (ptr :address)
-                   (arm642-one-targeted-reg-form seg valform ptr)
-                   (with-imm-target (ptr) (r :u64)
-                     (cond ((or force-stack
-                                (> (the fixnum (+ ngpr-args spec)) 8))
-                            (unless force-stack
-                              (setq ngpr-args 8))
-                            (dotimes (i spec)
-                              (! mem-ref-c-doubleword r ptr
-                                 (ash i arm64::word-shift))
-                              (store-overflow-gpr r :unsigned-doubleword)))
-                           (t
-                            (dotimes (i spec)
-                              (! mem-ref-c-doubleword r ptr
-                                 (ash i arm64::word-shift))
-                              (! set-c-arg r gpr-offset)
-                              (incf gpr-offset))
-                            (incf ngpr-args spec))))))
-                (t
-                 (with-imm-target () (valreg :natural)
-                   (let* ((reg (arm642-unboxed-integer-arg-to-reg
-                                seg valform valreg spec)))
-                     (cond (force-stack
-                            (store-overflow-gpr reg spec))
-                           (t
-                            (incf ngpr-args)
-                            (cond ((<= ngpr-args 8)
-                                   (! set-c-arg reg gpr-offset)
-                                   (incf gpr-offset))
-                                  (t
-                                   (store-overflow-gpr reg spec)))))))))))
-      ;; Load the FP argument registers from the staging slots.
-      (do* ((fpreg 0 (1+ fpreg))
-            (reloads (nreverse fp-loads) (cdr reloads)))
-           ((or (null reloads) (= fpreg 8)))
-        (declare (list reloads) (fixnum fpreg))
-        (let* ((reload (car reloads))
-               (size (car reload))
-               (from (cdr reload)))
-          (if (eq size :double-float)
-            (! reload-double-c-arg ($ fpreg :class :fpr :mode :double-float) from)
-            (! reload-single-c-arg ($ fpreg :class :fpr :mode :single-float) from))))
-      ;; :structure-return macptr → raw address in x8 (AAPCS64 IRLO).
-      ;; :registers macptr → arg_y for ffcall_return_registers.
-      ;; Entry point last into arg_z.  Order matches x8664.
-      (when structure-return
-        (arm642-vpop-register seg ($ arm64::arg_z))
-        (! macptr-to-structure-return-reg ($ arm64::arg_z)))
-      (when return-registers
-        (arm642-vpop-register seg ($ arm64::arg_y)))
-      (arm642-vpop-register seg ($ arm64::arg_z))
-      (if return-registers
-        (! ff-call-return-registers)
-        (! ff-call))
-      (setq *arm642-cstack* pre-frame-cstack)
-      (when vreg
-        (cond ((eq resultspec :void) (<- nil))
-              ((eq resultspec :double-float)
-               (<- ($ 0 :class :fpr :mode :double-float)))
-              ((eq resultspec :single-float)
-               (<- ($ 0 :class :fpr :mode :single-float)))
-              ((eq resultspec :unsigned-doubleword)
-               (ensuring-node-target (target vreg)
-                 (arm642-box-u64 seg target ($ arm64::imm0 :mode :u64))))
-              ((eq resultspec :signed-doubleword)
-               (ensuring-node-target (target vreg)
-                 (arm642-box-s64 seg target ($ arm64::imm0 :mode :s64))))
-              (t
-               (<- (make-wired-lreg arm64::imm0
-                                    :mode
-                                    (gpr-mode-name-value
-                                     (case resultspec
-                                       (:address :address)
-                                       (:signed-byte :s8)
-                                       (:unsigned-byte :u8)
-                                       (:signed-halfword :s16)
-                                       (:unsigned-halfword :u16)
-                                       (:signed-fullword :s32)
-                                       (t :u32))))))))
-      (^))))
+                      (! set-c-arg reg other-offset)
+                      (incf other-offset)))))))))
+    ;; Load the FP argument registers from the staging slots.  AAPCS64
+    ;; FP args index from d0 (v2 s36 deviation kept; fp1-based indexing
+    ;; is the PPC numbering).
+    (do* ((fpreg 0 (1+ fpreg))          ;d0..d7 -- AAPCS64 FP arg regs
+          (reloads (nreverse fp-loads) (cdr reloads)))
+         ((or (null reloads) (= fpreg 8)))
+      (declare (list reloads) (fixnum fpreg))
+      (let* ((reload (car reloads))
+             (size (car reload))
+             (from (cdr reload)))
+        (if (eq size :double-float)
+          (! reload-double-c-arg ($ fpreg :class :fpr :mode :double-float) from)
+          (! reload-single-c-arg ($ fpreg :class :fpr :mode :single-float) from))))
+    ;; Args 9+ of either class are already sitting in the NSAA block
+    ;; (arg-area words 8..): .SPffcall steps SP over header+prevsp+params
+    ;; at the blr, so the callee finds them AT [SP], per AAPCS64.  The
+    ;; 16m5c "not ratified" refusal that lived here is gone; the SP step
+    ;; in the three ffcall spentries is the kernel half of that change.
+    ;; LIFO: the regbuf/indirect buffer (if any) was pushed after the
+    ;; address, so it pops first.  Both subprim variants read the buffer
+    ;; macptr from arg_y (spentry-E-ffi.s): .SPffcall-return-registers
+    ;; stores {x0-x7 @ 0..56, d0-d7 @ 64..120} into it on return;
+    ;; .SPffcall-indirect-result loads its address into x8 before the
+    ;; call (AAPCS64 6.9).
+    (when (or return-registers indirect-result)
+      (arm642-vpop-register seg ($ arm64::arg_y)))
+    (arm642-vpop-register seg ($ arm64::arg_z))
+    (cond (return-registers (! ff-call-return-registers))
+          (indirect-result (! ff-call-indirect-result))
+          (t (! ff-call)))
+    ;; .SPffcall popped the c-frame at runtime; restore the static
+    ;; accounting NOW, not via the let*-shadow.  The shadow only
+    ;; unwinds after this handler returns -- but (^) below emits the
+    ;; FULL EPILOGUE for tail-position ff-calls, and with the bump
+    ;; still live the epilogue emitted an extra `add sp,#framesize`
+    ;; (the 16m5m double-pop: tail sites like MALLOC returned through
+    ;; a skewed frame; non-tail sites were unaffected).  The bump must
+    ;; be live only from alloc-c-frame to here, so nonlocal exits out
+    ;; of argument forms still pop the frame via his cstack-diff
+    ;; adjust-sp.
+    (setq *arm642-cstack* pre-frame-cstack)
+    (when vreg
+      (cond ((eq resultspec :void) (<- nil))
+            ;; FP results in d0 (v2 s36 AAPCS64 deviation kept).
+            ((eq resultspec :double-float)
+             (<- ($ 0 :class :fpr :mode :double-float)))
+            ((eq resultspec :single-float)
+             (<- ($ 0 :class :fpr :mode :single-float)))
+            ((eq resultspec :unsigned-doubleword)
+             (ensuring-node-target (target vreg)
+               (arm642-box-u64 seg target ($ arm64::imm0 :mode :u64))))
+            ((eq resultspec :signed-doubleword)
+             (ensuring-node-target (target vreg)
+               (arm642-box-s64 seg target ($ arm64::imm0 :mode :s64))))
+            (t
+             (<- (make-wired-lreg arm64::imm0
+                                  :mode
+                                  (gpr-mode-name-value
+                                   (case resultspec
+                                     (:address :address)
+                                     (:signed-byte :s8)
+                                     (:unsigned-byte :u8)
+                                     (:signed-halfword :s16)
+                                     (:unsigned-halfword :u16)
+                                     (:signed-fullword :s32)
+                                     (t :u32))))))))
+    (^)))
 
 
 
@@ -9950,24 +9798,53 @@
              (! %current-frame-ptr target)))
          (^))))
 
+;;; The C stack IS the control stack, so the "foreign stack pointer" is
+;;; SP — after WITH-VARIABLE-C-FRAME allocates, this is the new c-frame's
+;;; base, which is how the frame variable gets bound (nx1.lisp binds it
+;;; to (%foreign-stack-pointer) as the body's first act).  PPC
+;;; (ppc2.lisp ppc2-%foreign-stack-pointer) and ARM32 (arm2.lisp) define
+;;; this identically for their unified stacks; x86-64 reads
+;;; tcr.foreign-sp instead (separate foreign stack).
 (defarm642 arm642-%foreign-stack-pointer %foreign-stack-pointer (seg vreg xfer)
   (when vreg
     (ensuring-node-target (target vreg)
-      (! %foreign-stack-pointer target)))
+      (! %current-frame-ptr target)))
   (^))
 
-(defarm642 arm642-with-c-frame with-c-frame (seg vreg xfer body &aux
-                                                 (old-stack (arm642-encode-stack)))
-  (! alloc-c-frame 0)
-  (arm642-open-undo $undo-arm64-c-frame)
-  (arm642-undo-body seg vreg xfer body old-stack))
-
+;;; WITH-VARIABLE-C-FRAME: allocate a c-frame of SIZE param words around
+;;; BODY.  Model: x862-with-variable-c-frame (x862.lisp); the
+;;; interpreter-side %ff-call (arm64-def.lisp) is the only in-tree
+;;; linuxarm64 user.  The undo machinery already knew how to pop it —
+;;; $undo-arm64-c-frame => (! discard-c-frame) in the nlexit walker
+;;; below (previously dead: nothing opened that undo) — and the pop is
+;;; DYNAMIC (sp <- the frame's savedsp word at [sp,#8]), which is
+;;; correct both while the frame is live and after .SPffcall
+;;; (SUBPRIM-POPS) has replaced it with %%ff-result's fixed rebalance
+;;; frame.  All exits reach it: opening the undo bumps the same counter
+;;; arm642-unwind-stack treats as the catch diff, so normal falls into
+;;; arm642-nlexit, and arm642-do-return drains open undos the same way.
+;;;
+;;; ARM64-DEVIATION (vinsn choice, not operator semantics): a
+;;; compile-time-constant SIZE uses the constant alloc-c-frame vinsn,
+;;; whose single pre-indexed stp is ATOMIC w.r.t. suspension.  The
+;;; runtime-size alloc-variable-c-frame vinsn has a sub-sp/stp window
+;;; that pc_luser_xp does not finish yet (the vinsn pins header/prevsp
+;;; to imm0/imm1 for that recognizer; arm64-exceptions.c never grew the
+;;; case).  %ff-call always passes a constant; the runtime-size path has
+;;; no linuxarm64 caller today (objc-bridge is Darwin-only).  RATIFY:
+;;; implement the pc_luser_xp case before a runtime-size caller lands.
 (defarm642 arm642-with-variable-c-frame with-variable-c-frame (seg vreg xfer size body &aux
                                                                    (old-stack (arm642-encode-stack)))
-  (let* ((reg (arm642-one-untargeted-reg-form seg size ($ arm64::arg_z))))
-    (! alloc-variable-c-frame reg)
-    (arm642-open-undo $undo-arm64-c-frame)
-    (arm642-undo-body seg vreg xfer body old-stack)))
+  (let* ((fix (acode-fixnum-form-p size)))
+    (if (and fix
+             (typep fix 'fixnum)
+             (>= fix 0)
+             (<= (arm642-c-frame-words fix) 63)) ;stp scaled-imm7 reach
+      (! alloc-c-frame fix)
+      (let* ((reg (arm642-one-untargeted-reg-form seg size arm64::arg_z)))
+        (! alloc-variable-c-frame reg))))
+  (arm642-open-undo $undo-arm64-c-frame)
+  (arm642-undo-body seg vreg xfer body old-stack))
 
 (defun arm642-swap-unsigned-cond-bit (cr-bit)
   (cond ((eql cr-bit arm64::cond-hi) arm64::cond-lo)
@@ -10005,3 +9882,48 @@
   (def-natural-logical arm642-%natural-logand %natural-logand logand)
   (def-natural-logical arm642-%natural-logior %natural-logior logior)
   (def-natural-logical arm642-%natural-logxor %natural-logxor logxor))
+
+;;; Natural arithmetic, the same shape as the logical ops above.  PPC64
+;;; ppc2.lisp:8711 (%natural+) and :8735 (%natural-) additionally special-case a
+;;; u15 constant operand via %natural+-c/%natural--c; that leg is omitted here
+;;; for the reason given at the vinsns -- the arm64 natural family has no -c
+;;; forms.  Constant folding is kept: PPC64 folds both-constant operands through
+;;; ppc2-natural-constant, and arm642-absolute-natural is the arm64 equivalent
+;;; already used by def-natural-logical.
+(macrolet ((def-natural-arith (handler-name op-name folder)
+             `(defarm642 ,handler-name ,op-name (seg vreg xfer x y)
+                (if (null vreg)
+                  (progn
+                    (arm642-form seg nil nil x)
+                    (arm642-form seg nil xfer y))
+                  (let* ((naturalx (nx-natural-constant-p x))
+                         (naturaly (nx-natural-constant-p y)))
+                    (if (and naturalx naturaly)
+                      (arm642-absolute-natural seg vreg xfer
+                                               (logand (,folder naturalx naturaly)
+                                                       #xffffffffffffffff))
+                      (progn
+                        (with-imm-target () (xreg :natural)
+                          (with-imm-target (xreg) (yreg :natural)
+                            (arm642-two-targeted-reg-forms seg x xreg y yreg)
+                            (! ,op-name xreg xreg yreg))
+                          (<- xreg))
+                        (^))))))))
+  (def-natural-arith arm642-%natural+ %natural+ +)
+  (def-natural-arith arm642-%natural- %natural- -))
+
+;;; Natural shifts by a CONSTANT amount.  PPC64 ppc2.lisp:8852/8859 -- the count
+;;; is read straight out of the acode with acode-fixnum-form-p, which is also how
+;;; PPC64 relies on nx1 having established a constant; a variable amount would
+;;; hand the vinsn NIL for a :u8const operand and fail at definition time on both
+;;; ports.  Mirrored rather than "improved", per the no-workarounds rule: if a
+;;; variable-count path is ever needed it belongs upstream in both backends.
+(macrolet ((def-natural-shift (handler-name op-name)
+             `(defarm642 ,handler-name ,op-name (seg vreg xfer num amt)
+                (with-imm-target () (dest :natural)
+                  (arm642-one-targeted-reg-form seg num dest)
+                  (! ,op-name dest dest (acode-fixnum-form-p amt))
+                  (<- dest)
+                  (^)))))
+  (def-natural-shift arm642-natural-shift-left natural-shift-left)
+  (def-natural-shift arm642-natural-shift-right natural-shift-right))

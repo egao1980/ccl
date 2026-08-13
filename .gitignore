@@ -21,6 +21,8 @@ tags
 /tmp-bench/
 /darwin-x86-headers64
 
+/arm64cl
+/darm64cl
 /armcl
 /arm64cl
 /darm64cl
