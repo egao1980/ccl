@@ -15,9 +15,15 @@
                (flat-ff-call (cdr form))))))
 
 (defun count-reps (ff type)
+  ;; Counts FP field slots for TYPE: either per-field specs (:double-float
+  ;; value ...) or the atomic HFA spec '(:double-float . N).
   (loop for (a . rest) on (cddr ff) by #'cddr
         while rest
-        count (eq a type)))
+        sum (cond ((eq a type) 1)
+                  ((and (consp a) (eq (car a) 'quote)
+                        (consp (cadr a)) (eq (car (cadr a)) type))
+                   (cdr (cadr a)))
+                  (t 0))))
 
 (require "COCOA")
 (%p "finished=~s" (timed-wait-on-semaphore gui::*cocoa-ide-finished-launching* 60))

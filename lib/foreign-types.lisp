@@ -1625,7 +1625,12 @@ result-type-specifer is :VOID or NIL"
                    (unless (evenp (length args))
                      (error "Remaining arguments should be keyword/value pairs: ~s"
                             args))
-                   (unless (objc-messaging-entry-name-p external-name)
+                   ;; Only the Darwin arm64 ABI distinguishes variadic
+                   ;; args (stack-only).  Other targets must not see the
+                   ;; marker: their backends would treat it as a normal
+                   ;; argument spec and consume a bogus slot.
+                   (when (and (eq (backend-name *target-backend*) :darwinarm64)
+                              (not (objc-messaging-entry-name-p external-name)))
                      (call :variadic)
                      (call nil))
                    (do* ()

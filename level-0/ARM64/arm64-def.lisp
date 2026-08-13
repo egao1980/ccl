@@ -874,155 +874,279 @@
   (restore-full-lisp-context)
   (ret))
 
+;;; Interpreted ff-call.  The ARGUMENT POLICY here must mirror the
+;;; compiled arm642-aapcs64-ff-call exactly:
+;;;   * AAPCS64 register assignment (8 GPRs, 8 FPRs)
+;;;   * composites are ATOMIC: a numeric N-word spec or an HFA
+;;;     (rep . count) spec either fits entirely in the remaining
+;;;     registers or goes entirely to the stack, exhausting that
+;;;     register class (AAPCS64 C.3 / C.12)
+;;;   * Darwin packs non-variadic stack args at natural size; after a
+;;;     :variadic marker every arg is an 8-byte stack slot (Apple ABI);
+;;;     Linux always uses 8-byte slots.
+(defun %ff-call-stack-arg-bytes (spec)
+  (case spec
+    ((:signed-byte :unsigned-byte) 1)
+    ((:signed-halfword :unsigned-halfword) 2)
+    ((:signed-fullword :unsigned-fullword :single-float) 4)
+    (t 8)))
+
+(defun %ff-call-align-up (n alignment)
+  (declare (fixnum n alignment))
+  (logandc2 (the fixnum (+ n (the fixnum (1- alignment))))
+            (the fixnum (1- alignment))))
+
 (defun %ff-call (entry &rest specs-and-vals)
   (declare (dynamic-extent specs-and-vals))
   (let* ((len (length specs-and-vals))
-         (overflow-words 0))
-    (declare (fixnum len overflow-words))
+         (darwin-p #+darwinarm64-target t #-darwinarm64-target nil))
+    (declare (fixnum len))
     (let* ((result-spec (or (car (last specs-and-vals)) :void))
            (nargs (ash (the fixnum (1- len)) -1))
            (n-fp-args 0)
            (n-gpr-args 0)
+           (stack-bytes 0)
+           (force-stack nil)
            (regbuf nil)
            (struct-ret nil))
-      (declare (fixnum nargs n-fp-args n-gpr-args))
-      (ecase result-spec
-        ((:address :unsigned-doubleword :signed-doubleword
-                   :single-float :double-float
-                   :signed-fullword :unsigned-fullword
-                   :signed-halfword :unsigned-halfword
-                   :signed-byte :unsigned-byte
-                   :void)
-         (do* ((i 0 (1+ i))
-               (specs specs-and-vals (cddr specs))
-               (spec (car specs) (car specs)))
-              ((= i nargs))
-           (declare (fixnum i))
-           (case spec
-             ((:address :unsigned-doubleword :signed-doubleword
-                        :signed-fullword :unsigned-fullword
-                        :signed-halfword :unsigned-halfword
-                        :signed-byte :unsigned-byte)
-              (incf n-gpr-args)
-              (when (> n-gpr-args 8)
-                (incf overflow-words)))
-             ((:single-float :double-float)
-              (incf n-fp-args)
-              (when (> n-fp-args 8)
-                (incf overflow-words)))
-             (:registers)
-             (:structure-return)
-             (:variadic)
-             (t (if (typep spec 'unsigned-byte)
-                  ;; N-word struct: each word is a GPR (then overflow).
-                  (dotimes (k (the fixnum spec))
-                    (declare (ignore k))
-                    (incf n-gpr-args)
-                    (when (> n-gpr-args 8)
-                      (incf overflow-words)))
-                  (error "unknown arg spec ~s" spec)))))
-         (let ((total-words (+ 8 overflow-words)))
-           (declare (fixnum total-words))
-           (%stack-block ((fp-args (* 8 8))
-                          (result-buf 16)
-                          (argbuf (* 8 (1+ total-words))))
-             (dotimes (i 64) (setf (%get-unsigned-byte fp-args i) 0))
-             (dotimes (i (* 8 (1+ total-words)))
-               (setf (%get-unsigned-byte argbuf i) 0))
-             ;; Word 0 = fixnum nwords; params at offset 8.
-             (%set-object argbuf 0 total-words)
-             (let* ((gpr-offset 8)
-                    (other-offset (+ 8 (* 8 8))))
-               (declare (fixnum gpr-offset other-offset))
-               (setq n-fp-args 0 n-gpr-args 0)
-               (do* ((i 0 (1+ i))
-                     (specs specs-and-vals (cddr specs))
-                     (spec (car specs) (car specs))
-                     (val (cadr specs) (cadr specs)))
-                    ((= i nargs))
-                 (declare (fixnum i))
-                 (case spec
-                   (:variadic)
-                   (:registers (setq regbuf val))
-                   (:structure-return (setq struct-ret val))
-                   (:address
-                    (incf n-gpr-args)
-                    (cond ((<= n-gpr-args 8)
-                           (setf (%get-ptr argbuf gpr-offset) val)
-                           (incf gpr-offset 8))
+      (declare (fixnum nargs n-fp-args n-gpr-args stack-bytes))
+      (flet ((claim-stack (sz)
+               ;; Returns the byte offset (within the stack-arg region)
+               ;; for an SZ-byte store and advances the cursor.  Darwin
+               ;; non-variadic: natural packing; otherwise 8-byte slots.
+               (declare (fixnum sz))
+               (if (and darwin-p (not force-stack))
+                 (let* ((off (%ff-call-align-up stack-bytes sz)))
+                   (setq stack-bytes (+ off sz))
+                   off)
+                 (let* ((off (%ff-call-align-up stack-bytes 8)))
+                   (setq stack-bytes (+ off 8))
+                   off))))
+        (ecase result-spec
+          ((:address :unsigned-doubleword :signed-doubleword
+                     :single-float :double-float
+                     :signed-fullword :unsigned-fullword
+                     :signed-halfword :unsigned-halfword
+                     :signed-byte :unsigned-byte
+                     :void)
+           ;; Pass 1: compute stack-arg bytes (register args are free).
+           (do* ((i 0 (1+ i))
+                 (specs specs-and-vals (cddr specs))
+                 (spec (car specs) (car specs)))
+                ((= i nargs))
+             (declare (fixnum i))
+             (cond ((eq spec :variadic)
+                    (when darwin-p
+                      (setq stack-bytes (%ff-call-align-up stack-bytes 8))
+                      (setq force-stack t)))
+                   ((eq spec :registers))
+                   ((eq spec :structure-return))
+                   ((consp spec)          ; HFA (rep . count): atomic
+                    (let* ((count (cdr spec))
+                           (fsize (if (eq (car spec) :double-float) 8 4)))
+                      (declare (fixnum count fsize))
+                      (cond (force-stack
+                             (setq stack-bytes
+                                   (+ (%ff-call-align-up stack-bytes 8)
+                                      (* 8 (ceiling (* count fsize) 8)))))
+                            ((> (the fixnum (+ n-fp-args count)) 8)
+                             (setq n-fp-args 8)
+                             (setq stack-bytes
+                                   (if darwin-p
+                                     (+ (%ff-call-align-up stack-bytes fsize)
+                                        (* count fsize))
+                                     (+ (%ff-call-align-up stack-bytes 8)
+                                        (* 8 (ceiling (* count fsize) 8))))))
+                            (t
+                             (incf n-fp-args count)))))
+                   ((typep spec 'unsigned-byte) ; N-word composite: atomic
+                    (cond (force-stack
+                           (dotimes (k (the fixnum spec))
+                             (declare (ignorable k))
+                             (claim-stack 8)))
+                          ((> (the fixnum (+ n-gpr-args spec)) 8)
+                           (setq n-gpr-args 8)
+                           (setq stack-bytes
+                                 (+ (%ff-call-align-up stack-bytes 8)
+                                    (ash (the fixnum spec) 3))))
                           (t
-                           (setf (%get-ptr argbuf other-offset) val)
-                           (incf other-offset 8))))
-                   ((:signed-doubleword :signed-fullword :signed-halfword
-                                        :signed-byte)
-                    (incf n-gpr-args)
-                    (cond ((<= n-gpr-args 8)
-                           (setf (%%get-signed-longlong argbuf gpr-offset) val)
-                           (incf gpr-offset 8))
-                          (t
-                           (setf (%%get-signed-longlong argbuf other-offset) val)
-                           (incf other-offset 8))))
-                   ((:unsigned-doubleword :unsigned-fullword :unsigned-halfword
-                                          :unsigned-byte)
-                    (incf n-gpr-args)
-                    (cond ((<= n-gpr-args 8)
-                           (setf (%%get-unsigned-longlong argbuf gpr-offset) val)
-                           (incf gpr-offset 8))
-                          (t
-                           (setf (%%get-unsigned-longlong argbuf other-offset) val)
-                           (incf other-offset 8))))
-                   (:double-float
-                    (cond ((< n-fp-args 8)
-                           (setf (%get-double-float fp-args (* n-fp-args 8)) val)
-                           (incf n-fp-args))
-                          (t
-                           (setf (%get-double-float argbuf other-offset) val)
-                           (incf other-offset 8)
-                           (incf n-fp-args))))
-                   (:single-float
-                    (cond ((< n-fp-args 8)
-                           (setf (%get-single-float fp-args (* n-fp-args 8)) val)
-                           (incf n-fp-args))
-                          (t
-                           (setf (%get-single-float argbuf other-offset) val)
-                           (incf other-offset 8)
-                           (incf n-fp-args))))
-                   (t
-                    ;; N-word struct from macptr: consecutive GPR words.
-                    (let* ((p 0))
-                      (declare (fixnum p))
-                      (dotimes (k (the fixnum spec))
-                        (declare (ignore k))
-                        (incf n-gpr-args)
-                        (cond ((<= n-gpr-args 8)
-                               (setf (%get-ptr argbuf gpr-offset)
-                                     (%get-ptr val p))
-                               (incf gpr-offset 8))
-                              (t
-                               (setf (%get-ptr argbuf other-offset)
-                                     (%get-ptr val p))
-                               (incf other-offset 8)))
-                        (incf p 8))))))
-               (cond (regbuf
-                      (%do-ff-call-return-registers regbuf argbuf fp-args entry))
-                     (struct-ret
-                      (%do-ff-call-structure-return struct-ret result-buf
-                                                    argbuf fp-args entry))
-                     (t
-                      (%do-ff-call result-buf argbuf fp-args entry)))
-               (ecase result-spec
-                 (:void nil)
-                 (:address (%get-ptr result-buf 0))
-                 (:unsigned-byte (%get-unsigned-byte result-buf 0))
-                 (:signed-byte (%get-signed-byte result-buf 0))
-                 (:unsigned-halfword (%get-unsigned-word result-buf 0))
-                 (:signed-halfword (%get-signed-word result-buf 0))
-                 (:unsigned-fullword (%get-unsigned-long result-buf 0))
-                 (:signed-fullword (%get-signed-long result-buf 0))
-                 (:unsigned-doubleword (%get-natural result-buf 0))
-                 (:signed-doubleword (%get-signed-natural result-buf 0))
-                 (:single-float (%get-single-float result-buf 8))
-                 (:double-float (%get-double-float result-buf 8)))))))))))
+                           (incf n-gpr-args spec))))
+                   ((memq spec '(:single-float :double-float))
+                    (if (or force-stack (>= n-fp-args 8))
+                      (claim-stack (%ff-call-stack-arg-bytes spec))
+                      (incf n-fp-args)))
+                   ((memq spec '(:address :unsigned-doubleword :signed-doubleword
+                                 :signed-fullword :unsigned-fullword
+                                 :signed-halfword :unsigned-halfword
+                                 :signed-byte :unsigned-byte))
+                    (if (or force-stack (>= n-gpr-args 8))
+                      (claim-stack (%ff-call-stack-arg-bytes spec))
+                      (incf n-gpr-args)))
+                   (t (error "unknown arg spec ~s" spec))))
+           (let* ((stack-words (ash (the fixnum
+                                      (%ff-call-align-up stack-bytes 8))
+                                    -3))
+                  (total-words (+ 8 stack-words))
+                  (stack-base (+ 8 (* 8 8)))) ; byte offset of stack region
+             (declare (fixnum stack-words total-words stack-base))
+             (%stack-block ((fp-args (* 8 8))
+                            (result-buf 16)
+                            (argbuf (* 8 (1+ total-words))))
+               (dotimes (i 64) (setf (%get-unsigned-byte fp-args i) 0))
+               (dotimes (i (* 8 (1+ total-words)))
+                 (setf (%get-unsigned-byte argbuf i) 0))
+               ;; Word 0 = fixnum nwords; params at offset 8.
+               (%set-object argbuf 0 total-words)
+               (let* ((gpr-offset 8))
+                 (declare (fixnum gpr-offset))
+                 (setq n-fp-args 0 n-gpr-args 0
+                       stack-bytes 0 force-stack nil)
+                 ;; Pass 2: store each value (mirrors pass 1 exactly).
+                 (do* ((i 0 (1+ i))
+                       (specs specs-and-vals (cddr specs))
+                       (spec (car specs) (car specs))
+                       (val (cadr specs) (cadr specs)))
+                      ((= i nargs))
+                   (declare (fixnum i))
+                   (cond ((eq spec :variadic)
+                          (when darwin-p
+                            (setq stack-bytes (%ff-call-align-up stack-bytes 8))
+                            (setq force-stack t)))
+                         ((eq spec :registers) (setq regbuf val))
+                         ((eq spec :structure-return) (setq struct-ret val))
+                         ((consp spec)
+                          (let* ((count (cdr spec))
+                                 (double-p (eq (car spec) :double-float))
+                                 (fsize (if double-p 8 4)))
+                            (declare (fixnum count fsize))
+                            (cond ((or force-stack
+                                       (> (the fixnum (+ n-fp-args count)) 8))
+                                   (let* ((packed (and darwin-p (not force-stack)))
+                                          (off (if packed
+                                                 (%ff-call-align-up stack-bytes fsize)
+                                                 (%ff-call-align-up stack-bytes 8))))
+                                     (declare (fixnum off))
+                                     (unless force-stack (setq n-fp-args 8))
+                                     (dotimes (k count)
+                                       (if double-p
+                                         (setf (%get-double-float
+                                                argbuf (+ stack-base off (* k 8)))
+                                               (%get-double-float val (* k 8)))
+                                         (setf (%get-single-float
+                                                argbuf (+ stack-base off (* k 4)))
+                                               (%get-single-float val (* k 4)))))
+                                     (setq stack-bytes
+                                           (if packed
+                                             (+ off (* count fsize))
+                                             (+ off (* 8 (ceiling (* count fsize) 8)))))))
+                                  (t
+                                   (dotimes (k count)
+                                     (if double-p
+                                       (setf (%get-double-float
+                                              fp-args (* (+ n-fp-args k) 8))
+                                             (%get-double-float val (* k 8)))
+                                       (setf (%get-single-float
+                                              fp-args (* (+ n-fp-args k) 8))
+                                             (%get-single-float val (* k 4)))))
+                                   (incf n-fp-args count)))))
+                         ((typep spec 'unsigned-byte)
+                          (cond ((or force-stack
+                                     (> (the fixnum (+ n-gpr-args spec)) 8))
+                                 (unless force-stack (setq n-gpr-args 8))
+                                 (let* ((off (%ff-call-align-up stack-bytes 8)))
+                                   (declare (fixnum off))
+                                   (dotimes (k (the fixnum spec))
+                                     (setf (%get-ptr argbuf
+                                                     (+ stack-base off (* k 8)))
+                                           (%get-ptr val (* k 8))))
+                                   (setq stack-bytes
+                                         (+ off (ash (the fixnum spec) 3)))))
+                                (t
+                                 (dotimes (k (the fixnum spec))
+                                   (setf (%get-ptr argbuf gpr-offset)
+                                         (%get-ptr val (* k 8)))
+                                   (incf gpr-offset 8))
+                                 (incf n-gpr-args spec))))
+                         ((eq spec :double-float)
+                          (if (or force-stack (>= n-fp-args 8))
+                            (setf (%get-double-float
+                                   argbuf (+ stack-base (claim-stack 8)))
+                                  val)
+                            (progn
+                              (setf (%get-double-float fp-args (* n-fp-args 8))
+                                    val)
+                              (incf n-fp-args))))
+                         ((eq spec :single-float)
+                          (if (or force-stack (>= n-fp-args 8))
+                            (setf (%get-single-float
+                                   argbuf (+ stack-base (claim-stack 4)))
+                                  val)
+                            (progn
+                              (setf (%get-single-float fp-args (* n-fp-args 8))
+                                    val)
+                              (incf n-fp-args))))
+                         ((eq spec :address)
+                          (if (or force-stack (>= n-gpr-args 8))
+                            (setf (%get-ptr argbuf
+                                            (+ stack-base (claim-stack 8)))
+                                  val)
+                            (progn
+                              (setf (%get-ptr argbuf gpr-offset) val)
+                              (incf gpr-offset 8)
+                              (incf n-gpr-args))))
+                         ((memq spec '(:signed-doubleword :signed-fullword
+                                       :signed-halfword :signed-byte))
+                          (if (or force-stack (>= n-gpr-args 8))
+                            (let* ((sz (%ff-call-stack-arg-bytes spec))
+                                   (off (+ stack-base (claim-stack sz))))
+                              (declare (fixnum sz off))
+                              (case sz
+                                (1 (setf (%get-signed-byte argbuf off) val))
+                                (2 (setf (%get-signed-word argbuf off) val))
+                                (4 (setf (%get-signed-long argbuf off) val))
+                                (t (setf (%%get-signed-longlong argbuf off)
+                                         val))))
+                            (progn
+                              (setf (%%get-signed-longlong argbuf gpr-offset)
+                                    val)
+                              (incf gpr-offset 8)
+                              (incf n-gpr-args))))
+                         (t          ; unsigned integer specs
+                          (if (or force-stack (>= n-gpr-args 8))
+                            (let* ((sz (%ff-call-stack-arg-bytes spec))
+                                   (off (+ stack-base (claim-stack sz))))
+                              (declare (fixnum sz off))
+                              (case sz
+                                (1 (setf (%get-unsigned-byte argbuf off) val))
+                                (2 (setf (%get-unsigned-word argbuf off) val))
+                                (4 (setf (%get-unsigned-long argbuf off) val))
+                                (t (setf (%%get-unsigned-longlong argbuf off)
+                                         val))))
+                            (progn
+                              (setf (%%get-unsigned-longlong argbuf gpr-offset)
+                                    val)
+                              (incf gpr-offset 8)
+                              (incf n-gpr-args))))))
+                 (cond (regbuf
+                        (%do-ff-call-return-registers regbuf argbuf fp-args entry))
+                       (struct-ret
+                        (%do-ff-call-structure-return struct-ret result-buf
+                                                      argbuf fp-args entry))
+                       (t
+                        (%do-ff-call result-buf argbuf fp-args entry)))
+                 (ecase result-spec
+                   (:void nil)
+                   (:address (%get-ptr result-buf 0))
+                   (:unsigned-byte (%get-unsigned-byte result-buf 0))
+                   (:signed-byte (%get-signed-byte result-buf 0))
+                   (:unsigned-halfword (%get-unsigned-word result-buf 0))
+                   (:signed-halfword (%get-signed-word result-buf 0))
+                   (:unsigned-fullword (%get-unsigned-long result-buf 0))
+                   (:signed-fullword (%get-signed-long result-buf 0))
+                   (:unsigned-doubleword (%get-natural result-buf 0))
+                   (:signed-doubleword (%get-signed-natural result-buf 0))
+                   (:single-float (%get-single-float result-buf 8))
+                   (:double-float (%get-double-float result-buf 8))))))))))))
 
 ;;; %throw — Lisp-callable wrapper around .SPthrow (x8664 twin in
 ;;; level-0/X86/x86-def.lisp).  Caller: (apply #'%throw tag values…).

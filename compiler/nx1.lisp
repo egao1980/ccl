@@ -1412,9 +1412,10 @@
   '(:double-float :single-float :address :signed-doubleword
     :unsigned-doubleword :signed-fullword :unsigned-fullword
     :signed-halfword :unsigned-halfword :signed-byte :unsigned-byte
-    :hybrid-int-float :hybrid-float-int :hybrid-float-float
-    ;; Zero-width marker: following args are Darwin/arm64 variadic (stack).
-    :variadic))
+    :hybrid-int-float :hybrid-float-int :hybrid-float-float))
+
+(defun target-arm64-backend-p ()
+  (memq (backend-name *target-backend*) '(:darwinarm64 :linuxarm64)))
 
 (defun nx1-ff-call-internal (context address-expression arg-specs-and-result-spec operator )
   (declare (ignorable context))
@@ -1430,8 +1431,18 @@
       (when (null arg-specs) (return))
       (let* ((arg-keyword (pop arg-specs))
 	     (value (pop arg-specs)))
+        ;; arm64 HFA composite specs arrive as '(:single-float|:double-float
+        ;; . count) — quoted so nx-transform doesn't walk the dotted pair.
+        (when (and (consp arg-keyword)
+                   (eq (car arg-keyword) 'quote)
+                   (consp (cadr arg-keyword)))
+          (setq arg-keyword (cadr arg-keyword)))
         (if (or (memq arg-keyword *arg-spec-keywords*)
-		(typep arg-keyword 'unsigned-byte))
+		(typep arg-keyword 'unsigned-byte)
+                (and (consp arg-keyword)
+                     (target-arm64-backend-p)
+                     (memq (car arg-keyword) '(:single-float :double-float))
+                     (typep (cdr arg-keyword) '(integer 1 4))))
           (progn 
             (push arg-keyword specs)
             (push value vals))
@@ -1450,6 +1461,16 @@
                      (setq structure-return-seen t)
                      (push arg-keyword specs)
                      (push value vals))))
+                ((eq arg-keyword :variadic)
+                 ;; Zero-width marker: following args use the Darwin/arm64
+                 ;; C-variadic (stack) convention.  Only meaningful to the
+                 ;; AAPCS64 backends; reject elsewhere so it can't silently
+                 ;; consume an argument slot.
+                 (unless (target-arm64-backend-p)
+                   (error "~s argument spec is only supported on arm64 targets"
+                          arg-keyword))
+                 (push arg-keyword specs)
+                 (push value vals))
                 (t
                  (error "Unknown argument spec: ~s" arg-keyword))))))
     (unless (or (eq result-spec :void)

@@ -9133,6 +9133,12 @@
                    (setq overflow-bytes
                          (+ (arm642-align-up overflow-bytes sz) sz)))
                  (incf nother-words)))
+             (note-overflow-composite (nbytes align)
+               ;; Whole-composite stack copy: aligned start, natural packing.
+               (if (and darwin-os-p (not force-stack))
+                 (setq overflow-bytes
+                       (+ (arm642-align-up overflow-bytes align) nbytes))
+                 (incf nother-words (ceiling nbytes 8))))
              (store-overflow-gpr (reg argspec)
                (if (and darwin-os-p (not force-stack))
                  (let* ((sz (arm642-aapcs64-stack-arg-bytes argspec))
@@ -9145,6 +9151,19 @@
                    (setq other-byte-offset (+ off sz)))
                  (progn
                    (! set-c-arg reg other-offset)
+                   (incf other-offset))))
+             (store-overflow-fpr (freg argspec)
+               (if (and darwin-os-p (not force-stack))
+                 (let* ((sz (arm642-aapcs64-stack-arg-bytes argspec))
+                        (off (arm642-align-up other-byte-offset sz)))
+                   (if (eq argspec :double-float)
+                     (! set-double-c-arg-bytes freg off)
+                     (! set-single-c-arg-bytes freg off))
+                   (setq other-byte-offset (+ off sz)))
+                 (progn
+                   (if (eq argspec :double-float)
+                     (! set-double-c-arg freg other-offset)
+                     (! set-single-c-arg freg other-offset))
                    (incf other-offset)))))
       ;; Pass 1: count slots per class.
       (dolist (argspec argspecs)
@@ -9158,28 +9177,48 @@
                (setq return-registers t))
               ((eq argspec :structure-return)
                (setq structure-return t))
+              ;; HFA (rep . count): one atomic composite.  AAPCS64 C.3:
+              ;; either every field gets an FPR or the whole aggregate is
+              ;; copied to the stack and NSRN is set to 8 — never split.
+              ((consp argspec)
+               (let* ((rep (car argspec))
+                      (count (cdr argspec))
+                      (fsize (if (eq rep :double-float) 8 4)))
+                 (declare (fixnum count fsize))
+                 (cond (force-stack
+                        (incf nother-words (ceiling (* count fsize) 8)))
+                       ((> (the fixnum (+ nfpr-args count)) 8)
+                        (setq nfpr-args 8)
+                        (note-overflow-composite (* count fsize) fsize))
+                       (t
+                        (incf nfpr-args count)
+                        (if (eq rep :double-float)
+                          (incf ndouble-floats count)
+                          (incf nsingle-floats count))))))
               ((or (eq argspec :double-float) (eq argspec :single-float))
                (cond (force-stack
                       (note-overflow argspec))
+                     ((>= nfpr-args 8)
+                      (note-overflow argspec))
                      (t
                       (incf nfpr-args)
-                      (if (<= nfpr-args 8)
-                        (if (eq argspec :double-float)
-                          (incf ndouble-floats)
-                          (incf nsingle-floats))
-                        (compiler-bug "aapcs64-ff-call: more than 8 floating-point ~
-                                       args (~s) not yet supported" argspecs)))))
-              ;; N-word memory struct (from expand-ff-call when 64<bits<=128):
-              ;; load N consecutive doublewords from a macptr.
+                      (if (eq argspec :double-float)
+                        (incf ndouble-floats)
+                        (incf nsingle-floats)))))
+              ;; N-word composite (expand-ff-call, 64<bits<=128): one atomic
+              ;; argument.  AAPCS64 C.12: if it doesn't fit in the remaining
+              ;; GPRs, the whole composite goes to the stack and NGRN is set
+              ;; to 8 — never split between x7 and the stack.
               ((typep argspec 'unsigned-byte)
-               (dotimes (i argspec)
-                 (declare (ignore i))
-                 (cond (force-stack
-                        (note-overflow :unsigned-doubleword))
-                       (t
-                        (incf ngpr-args)
-                        (when (> ngpr-args 8)
-                          (note-overflow :unsigned-doubleword))))))
+               (cond (force-stack
+                      (dotimes (i argspec)
+                        (declare (ignore i))
+                        (note-overflow :unsigned-doubleword)))
+                     ((> (the fixnum (+ ngpr-args argspec)) 8)
+                      (setq ngpr-args 8)
+                      (note-overflow-composite (ash argspec 3) 8))
+                     (t
+                      (incf ngpr-args argspec))))
               (t
                (cond (force-stack
                       (note-overflow argspec))
@@ -9238,12 +9277,77 @@
                    (unless *arm642-reckless*
                      (! trap-unless-macptr reg))
                    (arm642-vpush-register seg reg)))
+                ;; HFA (rep . count): fields loaded from the composite's
+                ;; address into consecutive FPR staging slots, or the whole
+                ;; aggregate copied to the stack (mirrors pass 1 exactly).
+                ((consp spec)
+                 (let* ((rep (car spec))
+                        (count (cdr spec))
+                        (double-p (eq rep :double-float))
+                        (fsize (if double-p 8 4)))
+                   (declare (fixnum count fsize))
+                   (with-imm-target () (ptr :address)
+                     (arm642-one-targeted-reg-form seg valform ptr)
+                     (let* ((fp (if double-p
+                                  ($ 1 :class :fpr :mode :double-float)
+                                  ($ 1 :class :fpr :mode :single-float))))
+                       (cond (force-stack
+                              ;; Darwin variadic: composite copied into
+                              ;; 8-byte-aligned stack slots.
+                              (let* ((base (ash other-offset 3)))
+                                (dotimes (i count)
+                                  (if double-p
+                                    (progn
+                                      (! mem-ref-c-double-float fp ptr (* i 8))
+                                      (! set-double-c-arg-bytes fp (+ base (* i 8))))
+                                    (progn
+                                      (! mem-ref-c-single-float fp ptr (* i 4))
+                                      (! set-single-c-arg-bytes fp (+ base (* i 4))))))
+                                (incf other-offset (ceiling (* count fsize) 8))))
+                             ((> (the fixnum (+ nfpr-args count)) 8)
+                              (setq nfpr-args 8)
+                              (if darwin-os-p
+                                (dotimes (i count)
+                                  (let* ((off (arm642-align-up other-byte-offset fsize)))
+                                    (if double-p
+                                      (progn
+                                        (! mem-ref-c-double-float fp ptr (* i 8))
+                                        (! set-double-c-arg-bytes fp off))
+                                      (progn
+                                        (! mem-ref-c-single-float fp ptr (* i 4))
+                                        (! set-single-c-arg-bytes fp off)))
+                                    (setq other-byte-offset (+ off fsize))))
+                                (let* ((base (ash other-offset 3)))
+                                  (dotimes (i count)
+                                    (if double-p
+                                      (progn
+                                        (! mem-ref-c-double-float fp ptr (* i 8))
+                                        (! set-double-c-arg-bytes fp (+ base (* i 8))))
+                                      (progn
+                                        (! mem-ref-c-single-float fp ptr (* i 4))
+                                        (! set-single-c-arg-bytes fp (+ base (* i 4))))))
+                                  (incf other-offset (ceiling (* count fsize) 8)))))
+                             (t
+                              (dotimes (i count)
+                                (if double-p
+                                  (progn
+                                    (! mem-ref-c-double-float fp ptr (* i 8))
+                                    (! set-double-c-arg fp double-float-offset)
+                                    (push (cons :double-float double-float-offset)
+                                          fp-loads)
+                                    (incf double-float-offset 2))
+                                  (progn
+                                    (! mem-ref-c-single-float fp ptr (* i 4))
+                                    (! set-single-c-arg fp single-float-offset)
+                                    (push (cons :single-float single-float-offset)
+                                          fp-loads)
+                                    (incf single-float-offset))))
+                              (incf nfpr-args count)))))))
                 ((eq spec :double-float)
                  (let* ((df ($ 1 :class :fpr :mode :double-float)))
                    (arm642-one-targeted-reg-form seg valform df)
-                   (cond (force-stack
-                          (! set-double-c-arg df other-offset)
-                          (incf other-offset))
+                   (cond ((or force-stack (>= nfpr-args 8))
+                          (store-overflow-fpr df :double-float))
                          (t
                           (incf nfpr-args)
                           (! set-double-c-arg df double-float-offset)
@@ -9252,9 +9356,8 @@
                 ((eq spec :single-float)
                  (let* ((sf ($ 1 :class :fpr :mode :single-float)))
                    (arm642-one-targeted-reg-form seg valform sf)
-                   (cond (force-stack
-                          (! set-single-c-arg sf other-offset)
-                          (incf other-offset))
+                   (cond ((or force-stack (>= nfpr-args 8))
+                          (store-overflow-fpr sf :single-float))
                          (t
                           (incf nfpr-args)
                           (! set-single-c-arg sf single-float-offset)
@@ -9288,30 +9391,34 @@
                                  (incf gpr-offset))
                                 (t
                                  (store-overflow-gpr ptr spec)))))))
-                ;; N-word memory structs (unsigned-byte argspec): load N
+                ;; N-word composite (unsigned-byte argspec): load N
                 ;; consecutive doublewords from the macptr into consecutive
-                ;; GPRs (then overflow).  Match x8664: evaluate the macptr
-                ;; form straight into an :address temp (one-targeted does
-                ;; trap-unless-macptr + deref).  Evaluating into arg_z then
-                ;; deref-macptr was ASLR-flaky on Darwin (wrong pointer
-                ;; stable within a process).
+                ;; GPRs, or copy the whole composite to the stack — one
+                ;; atomic argument, mirroring pass 1 (AAPCS64 C.12).
+                ;; Match x8664: evaluate the macptr form straight into an
+                ;; :address temp (one-targeted does trap-unless-macptr +
+                ;; deref).  Evaluating into arg_z then deref-macptr was
+                ;; ASLR-flaky on Darwin (wrong pointer stable within a
+                ;; process).
                 ((typep spec 'unsigned-byte)
                  (with-imm-target () (ptr :address)
                    (arm642-one-targeted-reg-form seg valform ptr)
                    (with-imm-target (ptr) (r :u64)
-                     (dotimes (i spec)
-                       (! mem-ref-c-doubleword r ptr
-                          (ash i arm64::word-shift))
-                       (cond (force-stack
-                              (store-overflow-gpr r :unsigned-doubleword))
-                             (t
-                              (incf ngpr-args)
-                              (cond ((<= ngpr-args 8)
-                                     (! set-c-arg r gpr-offset)
-                                     (incf gpr-offset))
-                                    (t
-                                     (store-overflow-gpr
-                                      r :unsigned-doubleword)))))))))
+                     (cond ((or force-stack
+                                (> (the fixnum (+ ngpr-args spec)) 8))
+                            (unless force-stack
+                              (setq ngpr-args 8))
+                            (dotimes (i spec)
+                              (! mem-ref-c-doubleword r ptr
+                                 (ash i arm64::word-shift))
+                              (store-overflow-gpr r :unsigned-doubleword)))
+                           (t
+                            (dotimes (i spec)
+                              (! mem-ref-c-doubleword r ptr
+                                 (ash i arm64::word-shift))
+                              (! set-c-arg r gpr-offset)
+                              (incf gpr-offset))
+                            (incf ngpr-args spec))))))
                 (t
                  (with-imm-target () (valreg :natural)
                    (let* ((reg (arm642-unboxed-integer-arg-to-reg
