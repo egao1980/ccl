@@ -47,8 +47,30 @@ script in this tree.
 - Image dump: clear MAP_JIT macptrs before save; remmap on restart (`level-1/l1-readloop.lisp`, `level-1/l1-boot-2.lisp`)
 - CDB / ObjC: `darwin-arm64-headers/` (see `doc/porting/darwin-cdb.md`)
 
+## GC / FFI boundary (fixed 2026-08)
+
+The long-standing "BOGUS object" corruption family (fresh-IDE
+no-class-errors, Hemlock error sheets, package-htab corruption,
+intermittent corrupt-uvector-header GC aborts) was root-caused to
+GC-invisible ff-call state in `.SPffcall`: a raw return PC parked on
+the vstack was parsed by the vstack walkers as an ivector header
+(skipping every older slot in both mark and forward), and save0-save2
+were not spilled before going foreign.  Both fixed in
+`lisp-kernel/arm64-spentry.s` / `spentry-E-ffi.s`; regression smoke:
+`tools/darwin-launch-layout-repro.lisp`.  GC integrity checking
+(`(setq ccl::*gc-event-status-bits* (logior ... (ash 1 2)))`) runs
+clean through Cocoa launch.  The corruption-era masks (ObjC APPLY ban,
+frame-only backtraces, drawRect guards, untitled-Listener suppression)
+have been removed.
+
 ## Follow-ups
 
+- Verify the stock-built Clozure CL64.app (`(require :cocoa-application)`)
+  creates its untitled Listener window — the build completes and the
+  restarted image runs its event loop with live menus/callbacks, but
+  window materialization could not be confirmed in an unattended
+  session (screen locked).  A stock-built image is staged at
+  `Clozure CL64.app/Contents/Resources/ccl/darm64cl.image.stock-build`.
 - Upstream Clozure merge: reviewable PR against `Clozure/ccl` `arm64` with Darwin CI notes.
 
 See also: `doc/porting/darwin.md`, `tools/PR-darwinarm64.md`.

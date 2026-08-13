@@ -1,34 +1,28 @@
-;;;; OPEN BUG reproducer: layout-sensitive heap corruption during Cocoa launch.
+;;;; REGRESSION smoke for the (fixed) GC-invisible ff-call state bug.
 ;;;;
 ;;;;   ./tools/run-darwin-ide-smoke.sh 240 tools/darwin-launch-layout-repro.lisp LAUNCH-LAYOUT-OK
 ;;;;
-;;;; On affected image layouts this dies during (require "COCOA") with
+;;;; Historically (2026-08, before the .SPffcall fix) this exact load
+;;;; sequence died during (require "COCOA") on affected heap layouts:
 ;;;;   TYPE-ERROR: #<BOGUS object @ #x3020....DDEC> is not ... MACPTR
 ;;;;   in RELEASE-AUTORELEASE-POOL, process Initial(0)
-;;;; i.e. an autorelease-pool macptr on the Initial thread becomes BOGUS
-;;;; during application launch.  The same class of failure has been seen
-;;;; as "can't determine class of object tag=4 typecode=76 bogus=T" on
-;;;; fresh IDE instances, and as intermittent
-;;;;   "GC: object ... claims 0x604....... suffix dnodes - corrupt uvector header"
-;;;; kernel aborts during (rebuild-ccl :full t) / cocoa mini-app runs.
+;;;; The same failure family: fresh-IDE "can't determine class of object
+;;;; tag=4 typecode=76 bogus=T", package-htab symbol corruption, and
+;;;; intermittent "GC: object claims N suffix dnodes - corrupt uvector
+;;;; header" aborts.
 ;;;;
-;;;; Facts established so far (2026-08):
-;;;;   * Deterministic for a given image + load sequence; ANY extra
-;;;;     toplevel form before the defun below (or removing it) hides the
-;;;;     bug — pure heap-layout sensitivity.
-;;;;   * Not EGC-specific: (egc nil) and (egc t) prefixes both shift
-;;;;     layout and hide it; explicit full GCs do not reproduce it.
-;;;;   * Pools survive cross-thread GC hammering after launch: a pool
-;;;;     created on Initial stays valid across 10 full GCs, and a pool
-;;;;     local to Initial's stack survives GCs run from Initial.  The
-;;;;     corruption happens only inside the launch window.
-;;;;   * The BOGUS address's low 16 bits are stable (#x...DDEC) across
-;;;;     ASLR runs — same object shape/offset within its segment.
+;;;; ROOT CAUSE (fixed in lisp-kernel/arm64-spentry.s .SPffcall):
+;;;;   * the raw return PC parked on the vstack was parsed by the vstack
+;;;;     walkers as an ivector HEADER (immheader fulltag), making mark
+;;;;     and forward skip a bogus multi-GB "ivector" — every older
+;;;;     vstack slot invisible to the GC (now parked fixnum-boxed);
+;;;;   * save0-save2 were not spilled before going foreign, so boxed
+;;;;     values there were invisible while any GC ran (now spilled).
 ;;;;
-;;;; Next diagnostic step: lldb hardware watchpoint on the doomed
-;;;; address (break at launch start, compute the address from the pool
-;;;; allocation, watch for the stray write).  See doc/porting/darwin-cdb.md
-;;;; for running darm64cl under lldb with Mach exceptions.
+;;;; The failure was heap-layout-sensitive (any extra toplevel form
+;;;; hid it), which is why it presented as an intermittent heisenbug.
+;;;; Keep this file byte-stable: the defun before the require is part
+;;;; of the layout that reproduced the original bug.
 
 (in-package :ccl)
 (defun %p (fmt &rest args) (apply #'format t fmt args) (terpri) (force-output))
