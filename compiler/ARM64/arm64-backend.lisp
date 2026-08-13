@@ -284,10 +284,6 @@
 
 (defvar *arm64-backend* (car *known-arm64-backends*))
 
-;;; Darwin/arm64: code runs at the canonical VA (purify RX + MAP_JIT).
-(defun darwinarm64-heap-exec-bias-p ()
-  nil)
-
 (defun fixup-arm64-backend ()
   (dolist (b *known-arm64-backends*)
     (setf (backend-lap-opcodes b) #()

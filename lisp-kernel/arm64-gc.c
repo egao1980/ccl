@@ -141,26 +141,6 @@ check_marked_extent(LispObj n, natural dnode, natural suffix_dnodes)
 #if defined(DARWIN) && defined(ARM64)
 /* PC/LR are always the canonical VA (pure RX or MAP_JIT). */
 static inline Boolean
-darwin_arm64_pc_is_biased(LispObj xpc)
-{
-  (void)xpc;
-  return false;
-}
-
-static inline LispObj
-darwin_arm64_unbias_pc(LispObj xpc)
-{
-  return xpc;
-}
-
-static inline LispObj
-darwin_arm64_maybe_rebias_pc(LispObj original, LispObj updated)
-{
-  (void)original;
-  return updated;
-}
-
-static inline Boolean
 darwin_arm64_ptr_in_purify_source(BytePtr p, BytePtr low, BytePtr high)
 {
   if (p > low && p < high) {
@@ -656,9 +636,6 @@ mark_ephemeral_root(LispObj n)                       /* ppc-gc.c:345-364 */
 void
 mark_pc_root(LispObj xpc)                            /* ppc-gc.c:379-411 */
 {
-#if defined(DARWIN) && defined(ARM64)
-  xpc = darwin_arm64_unbias_pc(xpc);
-#endif
   if ((xpc & 3) != 0) {
     Bug(NULL, "Bad PC locative!");
   } else {
@@ -1644,10 +1621,6 @@ locative_forwarding_address(LispObj obj)             /* ppc-gc.c:1223-1257 */
 {
   int tag_n;
   natural dnode;
-#if defined(DARWIN) && defined(ARM64)
-  LispObj original = obj;
-  obj = darwin_arm64_unbias_pc(obj);
-#endif
 
   tag_n = fulltag_of(obj);
 
@@ -1662,30 +1635,17 @@ locative_forwarding_address(LispObj obj)             /* ppc-gc.c:1223-1257 */
      NOT accepted: arm64 conses are never pc locatives, and
      update_locref is only applied to known locative slots. */
   if ((obj & 3) != 0) {
-#if defined(DARWIN) && defined(ARM64)
-    return original;
-#else
     return obj;
-#endif
   }
 
   dnode = gc_dynamic_area_dnode(obj);
 
   if ((dnode >= GCndynamic_dnodes_in_area) ||
       (obj < GCfirstunmarked)) {
-#if defined(DARWIN) && defined(ARM64)
-    return original;
-#else
     return obj;
-#endif
   }
 
-#if defined(DARWIN) && defined(ARM64)
-  return darwin_arm64_maybe_rebias_pc(original,
-                                      dnode_forwarding_address(dnode, tag_n));
-#else
   return dnode_forwarding_address(dnode, tag_n);
-#endif
 }
 
 
@@ -2318,10 +2278,7 @@ purify_locref(LispObj *locaddr, BytePtr low, BytePtr high, area *to)
     insn;
   natural
     tag;
-#if defined(DARWIN) && defined(ARM64)
-  LispObj original = loc;
-  loc = darwin_arm64_unbias_pc(loc);
-#endif
+
   tag = fulltag_of(loc);
 
 #if defined(DARWIN) && defined(ARM64)
@@ -2339,12 +2296,7 @@ purify_locref(LispObj *locaddr, BytePtr low, BytePtr high, area *to)
        locative_forwarding_address. */
     if ((loc & 3) == 0) {
       if (*headerP == forward_marker) {
-        LispObj neu = (headerP[1]+tag);                 /* ppc-gc.c:1784-1785 */
-#if defined(DARWIN) && defined(ARM64)
-        *locaddr = darwin_arm64_maybe_rebias_pc(original, neu);
-#else
-        *locaddr = neu;
-#endif
+        *locaddr = (headerP[1]+tag);                    /* ppc-gc.c:1784-1785 */
       } else {
         /* Grovel backwards until the code vector's udf#0 sentinel is
            found; copy the code vector to to-space, then treat it as if
@@ -2390,14 +2342,7 @@ purify_locref(LispObj *locaddr, BytePtr low, BytePtr high, area *to)
            it right). */
         tag += node_size;
         headerP = ((LispObj*)p)-1;
-        {
-          LispObj neu = purify_displaced_object(((LispObj)headerP), to, tag);
-#if defined(DARWIN) && defined(ARM64)
-          *locaddr = darwin_arm64_maybe_rebias_pc(original, neu);
-#else
-          *locaddr = neu;
-#endif
-        }
+        *locaddr = purify_displaced_object(((LispObj)headerP), to, tag);
       }
     }
   }
@@ -2709,10 +2654,6 @@ void
 impurify_locref(LispObj *p, LispObj low, LispObj high, signed_natural delta)
 {                                                    /* ppc-gc.c:2050-2066 */
   LispObj q = *p;
-#if defined(DARWIN) && defined(ARM64)
-  LispObj original = q;
-  q = darwin_arm64_unbias_pc(q);
-#endif
 
   /* ARM64-DEVIATION: `(q & 3) == 0' replaces PPC64's switch over
      {cons, misc, even_fixnum, odd_fixnum} â€” see locative_forwarding_address
@@ -2720,11 +2661,7 @@ impurify_locref(LispObj *p, LispObj low, LispObj high, signed_natural delta)
      reach the readonly area), so excluding fulltag_cons(3) loses nothing. */
   if (((q & 3) == 0) &&
       (q >= low) && (q < high)) {
-#if defined(DARWIN) && defined(ARM64)
-    *p = darwin_arm64_maybe_rebias_pc(original, q + delta);
-#else
     *p = (q+delta);
-#endif
   }
 }
 
