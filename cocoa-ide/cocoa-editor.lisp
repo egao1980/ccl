@@ -2243,7 +2243,6 @@
      t)))
 
 (defmethod hemlock-ext:report-hemlock-error ((view hi:hemlock-view) condition debug-p)
-  (%log-hemlock-condition condition)
   (when debug-p (maybe-log-callback-error condition))
   (let ((pane (hi::hemlock-view-pane view)))
     (when (and pane (not (%null-ptr-p pane)))
