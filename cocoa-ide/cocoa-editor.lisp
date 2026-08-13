@@ -1632,65 +1632,43 @@
 ;;; early in the loading sequence confuses some Carbon libraries that're
 ;;; used in the event dispatch mechanism.
 ;;;
-;;; Darwin/arm64: avoid WITH-SLOTS on foreign ObjC slots.  Border rects must
-;;; use make-ns-rect (with-ns-rect / mutating #/bounds temps wedge the event
-;;; thread).  Do not join modeline fields with (apply #'concatenate …) inside
-;;; #/drawRect: — APPLY of &rest during an ObjC callback SIGBUSes on
-;;; darwinarm64 (mini-app 17 apply-concat vs stream-concat).  Build the
-;;; string via with-output-to-string instead.
 (defun draw-modeline-string (the-modeline-view)
-  ;; Entire body ignore-errors: a throw from #/drawRect: into AppKit corrupts
-  ;; the event thread on darwinarm64 (BOGUS objects / Hemlock error sheets).
-  (ignore-errors
-    (let* ((text-attributes (modeline-text-attributes the-modeline-view))
-           (buffer (buffer-for-modeline-view the-modeline-view)))
-      (when (and buffer
-                 (typep text-attributes 'macptr)
-                 (not (%null-ptr-p text-attributes)))
-        (let* ((string
-                (with-output-to-string (out)
-                  (dolist (field (hi::buffer-modeline-fields buffer))
-                    (write-string
-                     (or (ignore-errors
-                           (let ((s (funcall (hi::modeline-field-function field)
-                                             buffer)))
-                             (and (stringp s) s)))
-                         "")
-                     out)))))
-          (when (plusp (length string))
-            (let ((ns (#/autorelease (%make-nsstring string))))
-              (when (and (typep ns 'macptr) (not (%null-ptr-p ns)))
-                (#/drawAtPoint:withAttributes: ns
-                                               (ns:make-ns-point 5.0d0 1.0d0)
-                                               text-attributes)))))))))
+  (let* ((text-attributes (modeline-text-attributes the-modeline-view))
+         (buffer (buffer-for-modeline-view the-modeline-view)))
+    (when (and buffer
+               (typep text-attributes 'macptr)
+               (not (%null-ptr-p text-attributes)))
+      (let* ((string
+              (with-output-to-string (out)
+                (dolist (field (hi::buffer-modeline-fields buffer))
+                  (write-string
+                   (or (ignore-errors
+                         (let ((s (funcall (hi::modeline-field-function field)
+                                           buffer)))
+                           (and (stringp s) s)))
+                       "")
+                   out)))))
+        (when (plusp (length string))
+          (#/drawAtPoint:withAttributes: (#/autorelease (%make-nsstring string))
+                                         (ns:make-ns-point 5.0d0 1.0d0)
+                                         text-attributes))))))
 
 (objc:defmethod (#/drawRect: :void) ((self modeline-view) (rect :<NSR>ect))
   (declare (ignorable rect))
-  ;; Never throw into AppKit from drawRect.  On darwinarm64 a bad NSRect
-  ;; from #/bounds makes ns-rect-width look like a BOGUS lisp object, then
-  ;; (float …) signals "not of the expected type REAL" and Hemlock surfaces
-  ;; it as "Error in Hemlock command processing" (redisplay runs inside the
-  ;; command's handler-bind).
-  (ignore-errors
-    (let* ((bounds (#/bounds self))
-           (context (#/currentContext ns:ns-graphics-context))
-           (w (ignore-errors
-                (let ((x (ns:ns-rect-width bounds)))
-                  (and (realp x) (float x 1.0d0)))))
-           (h (ignore-errors
-                (let ((x (ns:ns-rect-height bounds)))
-                  (and (realp x) (float x 1.0d0))))))
-      (#/saveGraphicsState context)
-      (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.9d0 1.0d0))
-      (#_NSRectFill bounds)
-      (when (and w h)
-        (let ((top (ns:make-ns-rect 0.0d0 0.0d0 w 0.5d0))
-              (bot (ns:make-ns-rect 0.0d0 (- h 0.5d0) w 0.5d0)))
-          (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.3333d0 1.0d0))
-          (#_NSRectFill top)
-          (#_NSRectFill bot)))
-      (draw-modeline-string self)
-      (#/restoreGraphicsState context))))
+  (let* ((bounds (#/bounds self))
+         (context (#/currentContext ns:ns-graphics-context))
+         (w (float (ns:ns-rect-width bounds) 1.0d0))
+         (h (float (ns:ns-rect-height bounds) 1.0d0)))
+    (#/saveGraphicsState context)
+    (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.9d0 1.0d0))
+    (#_NSRectFill bounds)
+    (let ((top (ns:make-ns-rect 0.0d0 0.0d0 w 0.5d0))
+          (bot (ns:make-ns-rect 0.0d0 (- h 0.5d0) w 0.5d0)))
+      (#/set (#/colorWithCalibratedWhite:alpha: ns:ns-color 0.3333d0 1.0d0))
+      (#_NSRectFill top)
+      (#_NSRectFill bot))
+    (draw-modeline-string self)
+    (#/restoreGraphicsState context)))
 
 ;;; Hook things up so that the modeline is updated whenever certain buffer
 ;;; attributes change.

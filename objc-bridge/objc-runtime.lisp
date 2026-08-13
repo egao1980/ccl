@@ -2762,20 +2762,7 @@ argument lisp string."
           (error "Unknown ObjC init message: ~s" name))
         (setf (gethash init-keywords *objc-init-messages-for-init-keywords*)
               (setq info name-info))))
-    ;; Prefer FUNCALL over APPLY (arm64 HFA/struct arg safety).
-    (let ((fn (objc-message-info-lisp-name info))
-          (n (length args)))
-      (declare (fixnum n))
-      (case n
-        (0 (funcall fn instance))
-        (1 (funcall fn instance (car args)))
-        (2 (funcall fn instance (car args) (cadr args)))
-        (3 (funcall fn instance (car args) (cadr args) (caddr args)))
-        (4 (funcall fn instance (car args) (cadr args)
-                     (caddr args) (cadddr args)))
-        (5 (funcall fn instance (car args) (cadr args)
-                     (caddr args) (cadddr args) (nth 4 args)))
-        (t (error "send-objc-init-message: ~d args not supported" n))))))
+    (apply (objc-message-info-lisp-name info) instance args)))
                    
 (defun objc-set->setf (method)
   (let* ((info (get-objc-message-info method))

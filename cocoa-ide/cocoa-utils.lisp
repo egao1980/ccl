@@ -219,12 +219,8 @@
       (ignore-errors (clear-output *debug-io*))
       (ignore-errors (format *debug-io* "~&Lisp error: ~s" (or emsg condition)))
       (when (eq *log-callback-errors* :backtrace)
-        ;; Frame names only on arm64: detailed backtraces format stack arg
-        ;; slots, and BOGUS slots there turn one error into a cascade of
-        ;; "can't determine class of ..." (open arm64 corruption issue).
-        (let* ((detailed #+arm64-target nil #-arm64-target t)
-               (err (nth-value 1 (ignore-errors
-                                   (ccl:print-call-history :detailed-p detailed)))))
+        (let* ((err (nth-value 1 (ignore-errors
+                                   (ccl:print-call-history :detailed-p t)))))
           (when err
             (ignore-errors (format *debug-io* "~&Error printing call history - "))
             (ignore-errors (print err *debug-io*))
