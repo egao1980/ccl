@@ -24,8 +24,11 @@ Helper scripts (optional):
 
 ```bash
 ./tools/run-darwin-arm64-ci.sh          # smokes
-./tools/run-darwin-arm64-test-suites.sh # ccl-tests + ANSI
 ```
+
+Test suites (`ccl-tests` Rove suite, `test-ccl-and-suites` ANSI+CCL) are run
+from a checkout of `ccl-tests` against `./darm64cl`; there is no wrapper
+script in this tree.
 
 ## Architecture
 

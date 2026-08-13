@@ -124,7 +124,8 @@
 ;;; the A1 callback-frame contract (arm64-arch.lisp callback-frame.*;
 ;;; built by _spentry(eabi_callback), lisp-kernel/arm64-spentry.s).
 ;;; stack-ptr = CBF: x0..x7 saves at +0..56, the C caller's stack args
-;;; CONTIGUOUS at +64, d0..d7 saves at -64..-8, saved LR at -152.
+;;; CONTIGUOUS at +64, x8 sret spill at -16, d0..d7 saves at -80..-24,
+;;; saved LR at -168 (arm64-arch.lisp callback-frame.*).
 ;;;
 ;;; ARM64-DEVIATIONs from the PPC64 source:
 ;;;  - 8 FP arg regs (d0..d7), not PowerOpen's 13 (f1..f13).
