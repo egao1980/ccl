@@ -256,7 +256,13 @@ _ends
  * at the return; save2 carries the buffer address across the call
  * (callee-saved), parked on the vstack like save3/fn. */
 spentry ffcall_return_registers
+        /* Spill ALL boxed NVRs (fn + save0/save1; save2/save3 are pushed
+         * below where they gain kernel roles): a thread in a synchronous
+         * ff-call has gc_context = NULL, so the GC sees only the vstack.
+         * See the canonical note in `spentry ffcall' (arm64-spentry.s). */
         str fn, [vsp, #-node_size]!             /* ppc:1799 vpush_saveregs   */
+        str save0, [vsp, #-node_size]!
+        str save1, [vsp, #-node_size]!
         str save3, [vsp, #-node_size]!
         mov save3, sp
         /* Park lr in the boundary lisp_frame his alloc-c-frame RESERVED at the
@@ -361,8 +367,12 @@ spentry ffcall_return_registers
         ldr imm2, [save3, #c_frame.params]
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
+        /* Reload the boxed NVRs from the vstack — the GC may have moved
+         * the objects they reference while we were foreign. */
         ldr save2, [vsp], #node_size
         ldr save3, [vsp], #node_size
+        ldr save1, [vsp], #node_size
+        ldr save0, [vsp], #node_size
         ldr fn, [vsp], #node_size
         mov arg_w, rnil
         mov arg_x, rnil
@@ -583,7 +593,12 @@ endsp callback
  * lisp<->foreign transition) with the AArch64 syscall sequence
  * in the middle instead of a call. */
 spentry syscall
+        /* Spill ALL boxed NVRs — same GC-visibility contract as ffcall
+         * (canonical note in `spentry ffcall', arm64-spentry.s). */
         str fn, [vsp, #-node_size]!             /* ppc:5404 vpush_saveregs   */
+        str save0, [vsp, #-node_size]!
+        str save1, [vsp, #-node_size]!
+        str save2, [vsp, #-node_size]!
         str save3, [vsp, #-node_size]!
         mov save3, sp
         /* Park lr in the boundary lisp_frame his alloc-c-frame RESERVED at the
@@ -660,7 +675,12 @@ spentry syscall
         ldr imm2, [save3, #c_frame.params]
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
+        /* Reload the boxed NVRs from the vstack — the GC may have moved
+         * the objects they reference while we were foreign. */
         ldr save3, [vsp], #node_size
+        ldr save2, [vsp], #node_size
+        ldr save1, [vsp], #node_size
+        ldr save0, [vsp], #node_size
         ldr fn, [vsp], #node_size
         mov arg_w, rnil                         /* ppc:5461-5468             */
         mov arg_x, rnil
