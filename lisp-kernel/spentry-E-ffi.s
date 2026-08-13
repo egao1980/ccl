@@ -47,9 +47,9 @@
 
 /*
  * ===========================================================================
- * PROPOSED-CONSTANTS (ratify with Matt)
+ * LOCAL CONSTANTS
  * ---------------------------------------------------------------------------
- * NOT in arm64-constants.h.  Values DERIVED from the cited sources; the C
+ * NOT in arm64-constants.h.  Values derived from the cited sources; the C
  * runtime and compiler must agree.
  * ===========================================================================
  */
@@ -213,7 +213,7 @@ _ends
    uuo_misc 4 at pin 9c61574 -- it was misc 3 @115b7aa, before
    uuo_debug_trap was inserted at 3.  We invoke the MACRO, so the renumber
    costs nothing; only a hardcoded number would have broken.  Stack-overflow
-   sites use the PROPOSED uuo_interr extension. */
+   sites use the uuo_interr extension. */
 .set error_stack_overflow, 5            /* errors.s:25 */
 .macro check_pending_interrupt
         ldr nargs, [rcontext, #tcr.tlb_pointer]
@@ -247,7 +247,7 @@ _ends
  * whose macptr is passed in arg_y, before returning to lisp (ppc:1796
  * poweropen_ffcall_return_registers; needed because several C result
  * registers are dedicated lisp registers).
- * PROPOSED buffer layout (RATIFY - lisp-side ff-call glue must match):
+ * Buffer layout (lisp-side ff-call glue matches):
  *   [0..56]   x0..x7   (8 GPRs; PPC stores its 8 GPR args/results)
  *   [64..120] d0..d7   (8 FPRs; PPC stores f1-f13 - AAPCS64 result FPRs
  *                       are d0-d7, so 8 doubles here)
@@ -256,7 +256,13 @@ _ends
  * at the return; save2 carries the buffer address across the call
  * (callee-saved), parked on the vstack like save3/fn. */
 spentry ffcall_return_registers
+        /* Spill ALL boxed NVRs (fn + save0/save1; save2/save3 are pushed
+         * below where they gain kernel roles): a thread in a synchronous
+         * ff-call has gc_context = NULL, so the GC sees only the vstack.
+         * See the canonical note in `spentry ffcall' (arm64-spentry.s). */
         str fn, [vsp, #-node_size]!             /* ppc:1799 vpush_saveregs   */
+        str save0, [vsp, #-node_size]!
+        str save1, [vsp, #-node_size]!
         str save3, [vsp, #-node_size]!
         mov save3, sp
         /* Park lr in the boundary lisp_frame his alloc-c-frame RESERVED at the
@@ -288,7 +294,7 @@ spentry ffcall_return_registers
         cmp imm2, #fulltag_misc
         b.ne 8f
         ldurb w2, [arg_z, #misc_subtag_offset]
-        cmp imm2, #subtag_macptr
+        cmp w2, #subtag_macptr          /* was imm2 — never compared the subtag */
         b.ne 8f
         ldur temp4, [arg_z, #macptr.address]
         b 9f
@@ -315,7 +321,8 @@ spentry ffcall_return_registers
          * grows BELOW its incoming SP, so popping the frame here hands
          * the saved lr/backlink to the callee as scratch (16m5c crash in
          * the _SPffcall twin: return jumped into the c_frame).  Stack-arg
-         * layout = ratify item (frame head must move above params). */
+         * layout: frame head must move above params (not yet needed —
+         * the w13 codegen rejects stack args loudly). */
         /* Boundary bookkeeping + valence, identical to `spentry ffcall' in
          * arm64-spentry.s -- see the protocol note at the top of this file.
          * temp0, not imm0: imm0 is x0, now an outgoing argument. */
@@ -360,8 +367,12 @@ spentry ffcall_return_registers
         ldr imm2, [save3, #c_frame.params]
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
+        /* Reload the boxed NVRs from the vstack — the GC may have moved
+         * the objects they reference while we were foreign. */
         ldr save2, [vsp], #node_size
         ldr save3, [vsp], #node_size
+        ldr save1, [vsp], #node_size
+        ldr save0, [vsp], #node_size
         ldr fn, [vsp], #node_size
         mov arg_w, rnil
         mov arg_x, rnil
@@ -396,45 +407,44 @@ endsp callbackX
  * "frame pointer" fixnum from which the lisp glue reads the C arguments
  * and into which it writes the C result.
  *
- * PROPOSED-CONVENTION CALLBACK-IDX (RATIFY): the make-callback trampoline
- * stub enters here with the UNBOXED callback index in arg_w=x8 (16m14:
- * fixed a =x9 typo here — the code below reads arg_w, which is x8; the
- * level-1/arm64-callback-support.lisp generator stamps x8) (PPC uses
- * r11; any AAPCS64 caller-saved scratch works - the trampoline generator
- * is a lisp-side deliverable that must match).
+ * CALLBACK-IDX convention: the make-callback trampoline stub enters here
+ * with the UNBOXED callback index in x9 (arg_x).  x8 (arg_w) is left
+ * alone so AAPCS64's indirect-result pointer survives; .SPcallback
+ * spills it at CBF-16.  (Older trampolines stamped x8 and destroyed
+ * sret — fixed with level-1/arm64-callback-support.lisp.)
  *
- * PROPOSED frame contract (RATIFY - lisp-side callback glue must match;
- * boot-validated shape from our v2 tree): x0..x7 are pushed so the x0 slot
- * abuts the incoming sp; CBF = &x0save.  The C caller's stack args then
- * sit contiguously at CBF+64 (the PowerOpen single-linear-offset property,
- * reproduced).  d0..d7 saves at CBF-64..-8.  The GPR result is reloaded
- * from CBF+0/+8, the FPR result from CBF-64.  CBF is 16-aligned, so it is
- * its own fixnum boxing.
+ * Frame contract (lisp-side callback glue must match arm64-arch.lisp
+ * callback-frame.*): x0..x7 pushed so the x0 slot abuts the incoming
+ * CBF; stack args at CBF+64; x8 sret at CBF-16; d0..d7 at CBF-80..-24.
+ * GPR result reloaded from CBF+0/+8, FPR from CBF-80.  CBF is 16-aligned.
  *
  * ARM64-DEVIATION (vs PPC64 poweropen_callback):
  *   - callee-saved set = x19-x28 + fp/lr and d8-d15 (+FPCR/FPSR pair), NOT
  *     PPC's r13-r31/f-block; lisp may clobber d8-d15, so they are saved
- *     here (RATIFY: alternatively restrict Matt's compiler FPR pool).
+ *     here (alternative: restrict the compiler's FPR pool).
  *   - get_tcr is reached by a direct `bl` (kernel-internal symbol;
  *     PPC indirects through a lisp_global for TOC reasons, ppc:5115).
  *   - save0-3 enter lisp as 0 (valid fixnums; our v2-validated choice)
  *     rather than PPC's restore_saveregs-from-vstack (ppc:5149).  The
  *     outer ffcall reloads its own save0-3 from its vstack spill, so
- *     values are never lost.  RATIFY if Matt wants PPC's reload.
+ *     values are never lost.
  */
 spentry callback
         /* Save the C argument registers so the lisp glue can read them
            (ppc:5036-5043 stores r3-r10 into the caller frame; AAPCS64 has
-           no reserved param area, so push them - x0 slot lands at CBF). */
+           no reserved param area, so push them - x0 slot lands at CBF).
+           Entry: x8 = AAPCS64 sret (maybe), x9 = callback index. */
         stp x6, x7, [sp, #-16]!
         stp x4, x5, [sp, #-16]!
         stp x2, x3, [sp, #-16]!
         stp x0, x1, [sp, #-16]!
-        mov arg_x, sp                           /* arg_x=x10: CBF            */
+        mov x10, sp                             /* x10 = CBF (&x0)           */
+        /* Spill sret (x8) between GPR and FP blocks at CBF-16. */
+        stp x8, xzr, [sp, #-16]!
         stp d6, d7, [sp, #-16]!
         stp d4, d5, [sp, #-16]!
         stp d2, d3, [sp, #-16]!
-        stp d0, d1, [sp, #-16]!                 /* d0 save @ CBF-64          */
+        stp d0, d1, [sp, #-16]!                 /* d0 save @ CBF-80          */
         /* Save the AAPCS64 callee-saved GPRs (ppc:5052-5071 saves r13-r31). */
         stp x19, x20, [sp, #-16]!
         stp x21, x22, [sp, #-16]!
@@ -451,14 +461,13 @@ spentry callback
         mrs imm0, fpcr
         mrs imm1, fpsr
         stp imm0, imm1, [sp, #-16]!
-        /* Stash index + CBF in just-saved callee-saved regs: they must
-           survive the get_tcr C call (x9-x17 are caller-saved, and a
-           linker veneer may clobber x16/x17). */
-        mov save0, arg_w
-        mov save1, arg_x
+        /* Stash index (x9) + CBF (x10) in callee-saved regs: they must
+           survive the get_tcr C call (x9-x17 are caller-saved). */
+        mov save0, x9
+        mov save1, x10
         /* Recover the thread context (ppc:5114-5124 get_tcr(1)). */
         mov x0, #1
-        bl get_tcr
+        bl C(get_tcr)
         mov rcontext, x0
         /* Stash the exact foreign sp for the return path. */
         mov imm0, sp
@@ -499,7 +508,7 @@ spentry callback
            must reload it.  Use the SAME idiom as start_lisp below: nil_value
            is patched into the C global lisp_nil at initial heap mapping (Matt
            2026-07-11), so it is NOT a compile-time immediate. */
-        ldr rnil, =lisp_nil
+        load_addr_of_lisp_nil rnil
         ldr rnil, [rnil]
         /* Cover the foreign region below the enclosing lisp boundary -- the C
            caller's frames plus every register block this spentry just pushed --
@@ -522,7 +531,7 @@ spentry callback
         ldr nfn, [fname, #symbol.fcell]
         ldr temp4, [nfn, #_function.codevector]
         blr temp4
-        /* Lisp wrote the result into CBF+0/+8 / CBF-64 (glue contract).
+        /* Lisp wrote the result into CBF+0/+8 / CBF-80 (glue contract).
            CBF is recomputed below from the restored sp (fixed layout);
            first publish lisp state back to the tcr (ppc:5159-5169). */
         str allocptr,  [rcontext, #tcr.save_allocptr]   /* ppc:5166-5169     */
@@ -548,42 +557,48 @@ spentry callback
         ldp d10, d11, [sp], #16
         ldp d8,  d9,  [sp], #16
         /* Reload the C result BEFORE x19/x20 are restored: sp now points at
-           the callee-saved GPR block; CBF = sp + 96 + 64. */
-        add imm2, sp, #(6*16 + 4*16)            /* imm2 = CBF                */
+           the callee-saved GPR block; CBF = sp + 96 (callee GPR) + 80
+           (d0-d7 + sret slot). */
+        add imm2, sp, #(6*16 + 5*16)            /* imm2 = CBF                */
         ldr x0, [imm2]                          /* GPR result (ppc:5213-5214)*/
         ldr x1, [imm2, #8]
-        ldur d0, [imm2, #-64]                   /* FPR result                */
+        /* HFA returns (NSRect = 4×double, etc.) need v0..vN.  Reload all
+           eight volatile FP arg/result regs from the d0..d7 save area
+           (d0 @ CBF-80). */
+        ldp d0, d1, [imm2, #-80]
+        ldp d2, d3, [imm2, #-64]
+        ldp d4, d5, [imm2, #-48]
+        ldp d6, d7, [imm2, #-32]
         /* Restore callee-saved GPRs (ppc:5179-5197) and pop the arg-save
-           areas (ppc:5212); x0/x1/d0 carry the result (ppc:5225 blr). */
+           areas (ppc:5212); x0/x1/d0-d7 carry the result (ppc:5225 blr). */
         ldp x29, lr,  [sp], #16
         ldp x27, x28, [sp], #16
         ldp x25, x26, [sp], #16
         ldp x23, x24, [sp], #16
         ldp x21, x22, [sp], #16
         ldp x19, x20, [sp], #16
-        add sp, sp, #(16*8)                     /* drop d0-d7 + x0-x7 saves  */
+        add sp, sp, #(16*8 + 16)                /* drop d0-d7 + sret + x0-x7 */
         ret
 endsp callback
 
-/* Do a LINUX system call (ppc:5402 poweropen_syscall; the Darwin
- * carry-flag/return-twice protocol is NOT ported).  Same c_frame contract
- * and lisp<->foreign transition as ffcall; the middle is the AArch64
- * Linux syscall sequence instead of a call:
- *   x8 = syscall number (unboxed from arg_z), x0-x5 = args, `svc #0'
- * (analog of x86-spentry64.s:4619 syscall; AArch64 Linux takes <=6
- * integer args).
- * ARM64-DEVIATION: Linux/AArch64 returns -errno directly in x0, so PPC's
- * error-path negation (ppc:5441-5454) has no analog - imm0 carries the
- * raw result.  No FP args => the FPCR dance is skipped (as on PPC, which
- * doesn't touch the FPSCR in syscall). */
-#ifdef DARWIN
-#error "Darwin syscall convention not ported (svc #0x80 + carry-flag error protocol)"
-#endif
+/* Do a system call (ppc:5402 poweropen_syscall).  Same c_frame contract
+ * and lisp<->foreign transition as ffcall; the middle is the platform
+ * AArch64 syscall sequence:
+ *   Linux:  x8 = number, x0-x5 = args, `svc #0'; result/-errno in x0
+ *   Darwin: x16 = number, x0-x5 = args, `svc #0x80`; C set on error with
+ *           errno in x0 — negate to match Linux-style -errno for Lisp.
+ * (analog of x86-spentry64.s:4619 syscall + SYSCALL_SETS_CARRY_ON_ERROR).
+ * No FP args => the FPCR dance is skipped. */
 /* Body = patch-0003 _SPffcall shape (same c_frame contract and
- * lisp<->foreign transition) with the AArch64 Linux syscall sequence
+ * lisp<->foreign transition) with the AArch64 syscall sequence
  * in the middle instead of a call. */
 spentry syscall
+        /* Spill ALL boxed NVRs — same GC-visibility contract as ffcall
+         * (canonical note in `spentry ffcall', arm64-spentry.s). */
         str fn, [vsp, #-node_size]!             /* ppc:5404 vpush_saveregs   */
+        str save0, [vsp, #-node_size]!
+        str save1, [vsp, #-node_size]!
+        str save2, [vsp, #-node_size]!
         str save3, [vsp, #-node_size]!
         mov save3, sp
         /* Park lr in the boundary lisp_frame his alloc-c-frame RESERVED at the
@@ -613,7 +628,11 @@ spentry syscall
                            exceptions; publish a clean slate (PPC zeroes
                            ffi_exception here, ppc:5415-5419) */
         /* Syscall number + up to 6 args (ppc:5424-5432 loads r3-r10 + r0). */
-        asr x8, arg_z, #fixnumshift             /* ppc:5432 unbox_fixnum     */
+#ifdef DARWIN
+        asr x16, arg_z, #fixnumshift            /* Darwin: number in x16 */
+#else
+        asr x8, arg_z, #fixnumshift             /* Linux: number in x8 */
+#endif
         ldp x0, x1, [sp, #c_frame.params]
         ldp x2, x3, [sp, #(c_frame.params + 2*node_size)]
         ldp x4, x5, [sp, #(c_frame.params + 4*node_size)]
@@ -632,7 +651,14 @@ spentry syscall
         str temp0, [rcontext, #tcr.last_lisp_frame]
         mov temp0, #TCR_STATE_FOREIGN
         str temp0, [rcontext, #tcr.valence]
-        svc #0                                  /* ppc:5433 sc               */
+#ifdef DARWIN
+        svc #0x80                               /* Darwin AArch64 syscall */
+        b.cc 1f                                 /* C clear => success */
+        neg x0, x0                              /* errno -> -errno */
+1:
+#else
+        svc #0                                  /* Linux AArch64 syscall */
+#endif
         /* ---- return path (x0 = raw result / -errno) (ppc:5455-5489) ---- */
         ldr allocptr,  [rcontext, #tcr.save_allocptr]   /* ppc:5470-5472     */
         ldr allocbase, [rcontext, #tcr.save_allocbase]
@@ -649,7 +675,12 @@ spentry syscall
         ldr imm2, [save3, #c_frame.params]
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
+        /* Reload the boxed NVRs from the vstack — the GC may have moved
+         * the objects they reference while we were foreign. */
         ldr save3, [vsp], #node_size
+        ldr save2, [vsp], #node_size
+        ldr save1, [vsp], #node_size
+        ldr save0, [vsp], #node_size
         ldr fn, [vsp], #node_size
         mov arg_w, rnil                         /* ppc:5461-5468             */
         mov arg_x, rnil
@@ -679,7 +710,7 @@ endsp syscall
  * caller, hiding the variable-length arglist; if the caller's caller
  * expects one value, take the simpler path.
  *
- * PROPOSED-CONVENTION LEXPR-RA (RATIFY): PPC compares/keeps the CALLER's
+ * LEXPR-RA convention: PPC compares/keeps the CALLER's
  * return pc in loc_pc, while lr holds the return-to-prologue from the
  * `bla' - two live return addresses.  Matt's map has no loc_pc (x24=tsp),
  * so the lexpr function's prologue must pass the caller's return pc in
@@ -855,7 +886,7 @@ C(start_lisp):
         mov     save2, xzr
         mov     save3, xzr
         /* rnil: from the C global (image loader patches nil_value). */
-        ldr     rnil, =lisp_nil
+        load_addr_of_lisp_nil rnil
         ldr     rnil, [rnil]
         /* Lisp stack/alloc state from the TCR (ppc:162-165). */
         ldr     vsp, [rcontext, #tcr.save_vsp]

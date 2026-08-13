@@ -159,19 +159,10 @@ _ends
 .set tsp_frame.fixed_overhead, tsp_frame.size
 .set tsp_frame.data_offset, tsp_frame.size
 
-/* catch_frame: PPC64 layout (ppc-constants64.s _structf(catch_frame);
-   ppc-constants64.h:213), but with regs sized to this design's nsaveregs=4
-   (save0..save3) instead of PPC's 8. */
-_structf catch_frame
-  _node catch_tag           /* unbound_marker => unwind-protect, else catch */
-  _node link                /* previous catch frame                         */
-  _node mvflag              /* 0 => single value, fixnum 1 => multiple       */
-  _node csp                 /* saved control-stack lisp_frame pointer        */
-  _node db_link             /* special-binding chain head                    */
-  _field regs, (nsaveregs*node_size)  /* save0..save3                        */
-  _node xframe              /* exception-frame chain                         */
-  _node nfp                 /* numeric/foreign frame pointer                 */
-_endstructf
+/* catch_frame comes from arm64-constants.h: PPC64's layout
+   (ppc-constants64.s _structf(catch_frame); ppc-constants64.h:213), with
+   regs sized to this design's nsaveregs=4 (save0..save3) instead of
+   PPC's 8.  This file used to redefine it locally; keep one copy. */
 
 /*
  * ---------------------------------------------------------------------------
@@ -240,7 +231,7 @@ _endstructf
 .endm
 
 /* save/restore the boxed NVRs into/from a catch frame's regs[] (save0..save3).
-   catch_frame is a fulltag_misc-biased _structf, so .regs = 44 is only
+   catch_frame is a fulltag_misc-biased _structf, so .regs = 36 is only
    4-aligned -- stp/ldp (which need an 8-scaled imm7) cannot be used; single
    str/ldr take any byte offset. */
 .macro save_catch_regs cf
@@ -742,7 +733,7 @@ spentry setqsym
            Constant symbol => error; otherwise the real work is in .SPspecset. */
         ldr imm0, [arg_y, #symbol.flags]
         tst imm0, #sym_vbit_const_mask
-        b.eq _SPspecset
+        bcond_ext eq, _SPspecset
         mov arg_z, arg_y
         mov arg_y, #XCONST
         set_nargs 2
@@ -858,7 +849,7 @@ spentry bind_interrupt_level
         ldr imm4, [rcontext, #tcr.tlb_pointer]              /* ppc:7002 */
         ldr temp0, [imm4, #INTERRUPT_LEVEL_BINDING_INDEX]   /* ppc:7003 old level */
         ldr imm1, [rcontext, #tcr.db_link]                  /* ppc:7004 */
-        b.eq _SPbind_interrupt_level_0  /* ppc:7005 beq -> bind to 0 */
+        bcond_ext eq, _SPbind_interrupt_level_0  /* ppc:7005 beq -> bind to 0 */
         vpush1 temp0                    /* ppc:7006 binding frame: old value */
         vpush1 imm3                     /* ppc:7007               tlb index   */
         vpush1 imm1                     /* ppc:7008               prev db_link*/

@@ -107,12 +107,12 @@
   (ldur nfn (:@ nfn (:$ '%maybe-std-slot-value))) ; ppc:84 — DECIDE-14 (last nfn use first)
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:85 codevector — W8-D80
   (set-nargs 3)                         ; ppc:86
-  (br temp0)                            ; ppc:87-88 mtctr/bctr
+  (br-codevector temp0)                            ; ppc:87-88 mtctr/bctr
   @missing                              ; ppc:89 (%slot-id-ref-missing instance id)
   (ldur nfn (:@ nfn (:$ '%slot-id-ref-missing))) ; ppc:90 — DECIDE-14
   (set-nargs 2)                         ; ppc:91
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:92 — W8-D80
-  (br temp0))                           ; ppc:93-94
+  (br-codevector temp0))                           ; ppc:93-94
 
 ;;; =====================================================================
 ;;; %large-slot-id-value — ppc:96 [mixed-arch-body: ppc64 arm ported]
@@ -137,12 +137,12 @@
   (ldr arg_z (:@ temp0 imm1))           ; ppc:119 slot-definition
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:120 — W8-D80
   (set-nargs 3)                         ; ppc:121
-  (br temp0)                            ; ppc:122-123
+  (br-codevector temp0)                            ; ppc:122-123
   @missing                              ; ppc:124 (%slot-id-ref-missing instance id)
   (ldur nfn (:@ nfn (:$ '%slot-id-ref-missing))) ; ppc:125 — DECIDE-14
   (set-nargs 2)                         ; ppc:126
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:127 — W8-D80
-  (br temp0))                           ; ppc:128-129
+  (br-codevector temp0))                           ; ppc:128-129
 
 ;;; =====================================================================
 ;;; %small-set-slot-id-value — ppc:131
@@ -174,12 +174,12 @@
   (set-nargs 4)                         ; ppc:152
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:153 — W8-D80
   (vpush temp1)                         ; ppc:154 class = first (vstack) arg
-  (br temp0)                            ; ppc:155-156
+  (br-codevector temp0)                            ; ppc:155-156
   @missing                              ; ppc:157 (%slot-id-set-missing instance id new-value)
   (ldur nfn (:@ nfn (:$ '%slot-id-set-missing))) ; ppc:158 — DECIDE-14
   (set-nargs 3)                         ; ppc:159
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:160 — W8-D80
-  (br temp0))                           ; ppc:161-162
+  (br-codevector temp0))                           ; ppc:161-162
 
 ;;; =====================================================================
 ;;; %large-set-slot-id-value — ppc:164 [ppc64-sections: ppc64 arm ported]
@@ -209,7 +209,7 @@
   ;; (ldr temp0 misc-data-offset nfn); nfn is FUNCTION-tagged → W8-D80.
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:186 — W8-D80
   (vpush temp1)                         ; ppc:187
-  (br temp0)                            ; ppc:188-189
+  (br-codevector temp0)                            ; ppc:188-189
   @missing                              ; ppc:190 (%slot-id-set-missing instance id new-value)
   ;; ppc:191 loads '%slot-id-ref-missing (with set-nargs 3) although the
   ;; comment and the small twin (ppc:158) say %slot-id-set-missing.
@@ -219,7 +219,7 @@
   (ldur nfn (:@ nfn (:$ '%slot-id-ref-missing))) ; ppc:191 — DECIDE-14
   (set-nargs 3)                         ; ppc:192
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset))) ; ppc:193 — W8-D80
-  (br temp0))                           ; ppc:194-195
+  (br-codevector temp0))                           ; ppc:194-195
 
 ;;; =====================================================================
 ;;; *gf-proto* — ppc:197-218 (#-dont-use-lexprs branch; W8-D83 closed
@@ -256,7 +256,7 @@
       (ldur nfn (:@ nfn (:$ (+ (* gf.dcode arm64::node-size)
                                arm64::misc-function-offset))))   ; ppc:215 dcode function
       (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset)))     ; ppc:216 codevector — W8-D80
-      (br temp0)))))                        ; ppc:217-218 — DECIDE-15
+      (br-codevector temp0)))))                        ; ppc:217-218 — DECIDE-15
 
 ;;; =====================================================================
 ;;; funcallable-trampoline — ppc:271
@@ -268,7 +268,7 @@
   (ldur nfn (:@ nfn (:$ (+ (* gf.dcode arm64::node-size)
                            arm64::misc-function-offset)))) ; ppc:272 (svref gf.dcode)
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset)))   ; ppc:273 (svref 0 = codevector)
-  (br temp0))                           ; ppc:274-275 mtctr/bctr — DECIDE-15
+  (br-codevector temp0))                           ; ppc:274-275 mtctr/bctr — DECIDE-15
 
 ;;; =====================================================================
 ;;; unset-fin-trampoline — ppc:278
@@ -306,7 +306,7 @@
   (ldur nfn (:@ nfn (:$ (+ (* gf.dcode arm64::node-size)
                            arm64::misc-function-offset))))   ; ppc:295 dcode function
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset)))     ; ppc:296 codevector — W8-D80
-  (br temp0))                           ; ppc:297-298 — DECIDE-15
+  (br-codevector temp0))                           ; ppc:297-298 — DECIDE-15
 
 ;;; =====================================================================
 ;;; gag-two-arg — ppc:301
@@ -319,7 +319,7 @@
   (ldur nfn (:@ nfn (:$ (+ (* gf.dcode arm64::node-size)
                            arm64::misc-function-offset))))   ; ppc:305 dcode function
   (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset)))     ; ppc:306 codevector — W8-D80
-  (br temp0))                           ; ppc:307-308 — DECIDE-15
+  (br-codevector temp0))                           ; ppc:307-308 — DECIDE-15
 
 ;;; =====================================================================
 ;;; *cm-proto* — ppc:310-330 (W8-D83 closed 16m10)
@@ -349,4 +349,4 @@
       (ldur nfn (:@ nfn (:$ (+ (* combined-method.dcode arm64::node-size)
                                arm64::misc-function-offset))))   ; ppc:327 dcode function
       (ldur temp0 (:@ nfn (:$ arm64::misc-function-offset)))     ; ppc:328 codevector — W8-D80
-      (br temp0)))))                        ; ppc:329-330 — DECIDE-15
+      (br-codevector temp0)))))                        ; ppc:329-330 — DECIDE-15

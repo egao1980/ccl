@@ -397,11 +397,14 @@
 
 (defun make-di-vector (code-vector)
   (let* ((n (uvsize code-vector))
-         (v (make-array n)))
+         (v (make-array (1- n))))   ;don't need room for skipped udf sentinel
     (declare (fixnum n) (simple-vector v))
-    (dotimes (i n v)
-      (declare (fixnum i))
-      (setf (svref v i) (disassemble-instruction (uvref code-vector i))))))
+    (do ((ci 1 (1+ ci))
+         (vi 0 (1+ vi)))
+        ((= ci n))
+      (declare (fixnum ci vi))
+      (setf (svref v vi) (disassemble-instruction (uvref code-vector ci))))
+    v))
 
 (defun resolve-labels (di-vector)
   ;; Connect each branch's label reference to the label it targets.  For a
@@ -531,10 +534,81 @@
 (defun ccl::arm64-disassemble-xfunction (xfunction &optional
                                                      (stream *debug-io*))
   (let* ((code-vector (uvref xfunction 0))
-         (di-vector (make-di-vector code-vector)))
+         (di-vector (make-di-vector code-vector))
+         (functionp (typep xfunction 'function)) ;not cross-compiling
+         (previous-source-note nil)
+         (pc-counter 0))
+    (when functionp
+      (let ((source-note (function-source-note xfunction)))
+        (when source-note
+          (ccl::ensure-source-note-text source-note)
+          (if (source-note-filename source-note)
+            (format stream ";; Source: ~S:~D-~D"
+                    (ccl::source-note-filename source-note)
+                    (ccl::source-note-start-pos source-note)
+                    (ccl::source-note-end-pos source-note))
+            (let* ((source-text (ccl::source-note-text source-note)))
+              (when source-text
+                (format stream
+                        ";;; ~A" (ccl::string-sans-most-whitespace source-text
+                                                                   100))))))))
     (resolve-labels di-vector)
-    (print-di-vector di-vector stream)))
+    (dotimes (i (length di-vector))
+      (when functionp
+        (let ((source-note (find-source-note-at-pc xfunction (* i 4))))
+          (unless (eql (ccl::source-note-file-range source-note)
+                       (ccl::source-note-file-range previous-source-note))
+            (setf previous-source-note source-note)
+            (let* ((source-text (source-note-text source-note))
+                   (text (if source-text
+                           (ccl::string-sans-most-whitespace source-text 100)
+                           "#<no source text>")))
+              (format stream "~&~%;;; ~A" text)
+              (setq pc-counter 3)))))
+      (let ((di (svref di-vector i)))
+        (when (di-label di)
+          (format stream "~&~a" (di-label di)))
+        (print-di di stream)))))
 
 (defun ccl::arm64-xdisassemble (function)
   (ccl::arm64-disassemble-xfunction (ccl::function-to-function-vector function)
                                     *standard-output*))
+
+;;; Inspector expects a simple-vector of either comment strings or
+;;; (object label instr) where label is a PC fixnum or (:label PC) and
+;;; instr is the printed instruction string.  OBJECT is an inspectable
+;;; constant referenced by the insn when we can recover one (nil for now —
+;;; arm64 immediates rarely embed lisp pointers the way x86 does).
+(defun ccl::disassemble-lines (function)
+  (let ((source-note (function-source-note function)))
+    (when source-note
+      (ccl::ensure-source-note-text source-note)))
+  (let* ((xfunction (ccl::function-to-function-vector function))
+         (code-vector (uvref xfunction 0))
+         (di-vector (make-di-vector code-vector))
+         (previous-source-note nil)
+         (lines (make-array 20 :adjustable t :fill-pointer 0)))
+    (resolve-labels di-vector)
+    (dotimes (i (length di-vector))
+      (let* ((pc (* i 4))
+             (di (svref di-vector i))
+             (source-note (find-source-note-at-pc function pc)))
+        (unless (eql (ccl::source-note-file-range source-note)
+                     (ccl::source-note-file-range previous-source-note))
+          (setf previous-source-note source-note)
+          (let* ((source-text (source-note-text source-note))
+                 (text (if source-text
+                         (ccl::string-sans-most-whitespace source-text 100)
+                         "#<no source text>")))
+            (vector-push-extend (format nil ";;; ~A" text) lines)))
+        (vector-push-extend
+         (list nil
+               (if (di-label di) (list :label pc) pc)
+               (with-output-to-string (s)
+                 (format s "(~a" (di-mnemonic di))
+                 (dolist (op (di-operands di))
+                   (write-char #\space s)
+                   (print-operand op s))
+                 (write-char #\) s)))
+         lines)))
+    (coerce lines 'simple-vector)))
