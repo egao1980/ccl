@@ -171,27 +171,30 @@
 (defun target-env-modules (&optional (target
 				      (backend-name *host-backend*)))
   (append *env-modules*
-          (list
-           (ecase target
-             (:linuxppc32 'ffi-linuxppc32)
-             (:darwinppc32 'ffi-darwinppc32)
-             (:darwinppc64 'ffi-darwinppc64)
-             (:linuxppc64 'ffi-linuxppc64)
-	     (:darwinx8632 'ffi-darwinx8632)
-             (:linuxx8664 'ffi-linuxx8664)
-             (:darwinx8664 'ffi-darwinx8664)
-             (:freebsdx8664 'ffi-freebsdx8664)
-             (:solarisx8664 'ffi-solarisx8664)
-             (:win64 'ffi-win64)
-             (:linuxx8632 'ffi-linuxx8632)
-             (:win32 'ffi-win32)
-             (:solarisx8632 'ffi-solarisx8632)
-             (:freebsdx8632 'ffi-freebsdx8632)
-             (:linuxarm 'ffi-linuxarm)
-             (:androidarm 'ffi-androidarm)
-             (:darwinarm 'ffi-darwinarm)
-             (:darwinarm64 'ffi-darwinarm64)
-             (:linuxarm64 'ffi-linuxarm64)))))
+          (let* ((ffi (ecase target
+                        (:linuxppc32 'ffi-linuxppc32)
+                        (:darwinppc32 'ffi-darwinppc32)
+                        (:darwinppc64 'ffi-darwinppc64)
+                        (:linuxppc64 'ffi-linuxppc64)
+                        (:darwinx8632 'ffi-darwinx8632)
+                        (:linuxx8664 'ffi-linuxx8664)
+                        (:darwinx8664 'ffi-darwinx8664)
+                        (:freebsdx8664 'ffi-freebsdx8664)
+                        (:solarisx8664 'ffi-solarisx8664)
+                        (:win64 'ffi-win64)
+                        (:linuxx8632 'ffi-linuxx8632)
+                        (:win32 'ffi-win32)
+                        (:solarisx8632 'ffi-solarisx8632)
+                        (:freebsdx8632 'ffi-freebsdx8632)
+                        (:linuxarm 'ffi-linuxarm)
+                        (:androidarm 'ffi-androidarm)
+                        (:darwinarm 'ffi-darwinarm)
+                        (:darwinarm64 'ffi-darwinarm64)
+                        (:linuxarm64 'ffi-linuxarm64))))
+            ;; Both arm64 targets share the AAPCS64 module.
+            (if (memq target '(:darwinarm64 :linuxarm64))
+              (list 'ffi-arm64 ffi)
+              (list ffi)))))
 
 
 (defun target-compiler-modules (&optional (target
@@ -610,6 +613,35 @@ not runtime errors reported by a successfully created process."
           (lisp-implementation-version))
   (format stream "~&Path to source code: ~s" (truename "ccl:")))
 
+(defun %build-lisp-kernel (&key clean (extra-make-args nil) verbose)
+  "Run make in lisp-kernel/<platform>.  EXTRA-MAKE-ARGS is a list of
+additional make arguments."
+  (let* ((kdir (format nil "lisp-kernel/~a" (kernel-build-directory)))
+         (j (format nil "~d" (1+ (cpu-count)))))
+    (when clean
+      (run-program "make" (list "-C" kdir "clean")))
+    (format t "~&;Building lisp-kernel~@[ (~{~a~^ ~})~] ..." extra-make-args)
+    (force-output)
+    (with-output-to-string (s)
+      (let* ((args (append (list "-C" kdir "-j" j) extra-make-args))
+             (proc (run-program (make-program) args
+                                :output s :error :output)))
+        (multiple-value-bind (status exit-code)
+            (external-process-status proc)
+          (if (and (eq :exited status) (zerop exit-code))
+            (progn
+              (format t "~&;Kernel built successfully.")
+              (when verbose
+                (format t "~&;kernel build output:~%~a"
+                        (get-output-stream-string s)))
+              (sleep 1))
+            (error "Error(s) during kernel compilation.~%~a"
+                   (or
+                    (describe-external-process-failure
+                     proc
+                     "Developer tools may not be installed correctly.")
+                    (get-output-stream-string s)))))))))
+
 (defun rebuild-ccl (&key update full clean kernel force (reload t) exit
                          reload-arguments verbose optional-features
                          (save-source-locations *ccl-save-source-locations*)
@@ -648,53 +680,24 @@ the lisp and run REBUILD-CCL again.")
                                            :type (pathname-type *.fasl-pathname*))
                             "ccl:**;")))
                  (delete-file f)))
+             #+darwinarm64-target
+             (when (fboundp '%enable-darwinarm64-map-jit-fasls)
+               (%enable-darwinarm64-map-jit-fasls))
              (with-global-optimization-settings ()
                (compile-ccl (not (null force)))
                (if force (xload-level-0 :force) (xload-level-0)))
              (when kernel
-               (when (or clean force)
-                 ;; Do a "make clean".
-                 (run-program "make"
-                              (list "-C"
-                                    (format nil "lisp-kernel/~a"
-                                            (kernel-build-directory))
-                                    "clean")))
-               (format t "~&;Building lisp-kernel ...")
-               (with-output-to-string (s)
-                 (let* ((proc (run-program (make-program)
-                                           (list "-C" 
-                                                 (format nil "lisp-kernel/~a"
-                                                         (kernel-build-directory))
-                                                 "-j"
-                                                            
-                                                 (format nil "~d" (1+ (cpu-count))))
-                                           :output s
-                                           :error :output)))
-                   (multiple-value-bind (status exit-code)
-                       (external-process-status proc)
-                     (if (and (eq :exited status) (zerop exit-code))
-                       (progn
-                         (format t "~&;Kernel built successfully.")
-                         (when verbose
-                           (format t "~&;kernel build output:~%~a"
-                                   (get-output-stream-string s)))
-                         (sleep 1))
-                       (error "Error(s) during kernel compilation.~%~a"
-                              (or
-                               (describe-external-process-failure
-                                proc
-                                "Developer tools may not be installed correctly.")
-                               (get-output-stream-string s))))))))
+               (%build-lisp-kernel :clean (or clean force) :verbose verbose))
              (when reload
                (let* ((old-write-date
                        (or (ignore-errors (file-write-date (standard-image-name)))
                            0)))
-                 (with-input-from-string (cmd (format nil
-                                                "(save-application ~s)"
-                                                (standard-image-name)))
-                   (with-output-to-string (output)
-                     (multiple-value-bind (status exit-code)
-                         (external-process-status
+                 (with-output-to-string (output)
+                   (multiple-value-bind (status exit-code)
+                       (external-process-status
+                        (with-input-from-string
+                            (cmd (format nil "(save-application ~s)"
+                                         (standard-image-name)))
                           (run-program
                            (format nil "./~a" (standard-kernel-name))
                            (list* "--image-name" (standard-boot-image-name)
@@ -703,21 +706,21 @@ the lisp and run REBUILD-CCL again.")
                                   reload-arguments)
                            :input cmd
                            :output output
-                           :error output))
-                       (if (and (eq status :exited)
-                                (eql exit-code 0))
-                         (let* ((write-date (or (ignore-errors (file-write-date (standard-image-name))) 0)))
-                           (unless (and write-date (> write-date old-write-date))
-                             (error "The heap image ~a does not appear to have been written correctly.  This may indicate a problem with the bootstapping image." (standard-image-name)))
-                           (format t "~&;Wrote heap image: ~s"
-                                   (truename (format nil "ccl:~a"
-                                                     (standard-image-name))))
-                           (when verbose
-                             (format t "~&;Reload heap image output:~%~a"
-                                     (get-output-stream-string output))))
-                         (error "Errors (~s ~s) reloading boot image:~&~a"
-                                status exit-code
-                                (get-output-stream-string output))))))))
+                           :error output)))
+                     (if (and (eq status :exited)
+                              (eql exit-code 0))
+                       (let* ((write-date (or (ignore-errors (file-write-date (standard-image-name))) 0)))
+                         (unless (and write-date (> write-date old-write-date))
+                           (error "The heap image ~a does not appear to have been written correctly.  This may indicate a problem with the bootstapping image." (standard-image-name)))
+                         (format t "~&;Wrote heap image: ~s"
+                                 (truename (format nil "ccl:~a"
+                                                   (standard-image-name))))
+                         (when verbose
+                           (format t "~&;Reload heap image output:~%~a"
+                                   (get-output-stream-string output))))
+                       (error "Errors (~s ~s) reloading boot image:~&~a"
+                              status exit-code
+                              (get-output-stream-string output)))))))
              (when exit
                (quit)))
         (setf (current-directory) cd)))))

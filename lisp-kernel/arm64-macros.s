@@ -31,6 +31,33 @@ _SP\name:
         note_function_end _SP\name
         .endm
 
+/* Darwin's assembler rejects conditional branches to external symbols
+ * ("conditional branch requires assembler-local label").  Expand to a
+ * local conditional + unconditional branch to the external target.
+ * Linux gas accepts the direct form; keep it there for denser code. */
+        .macro bcond_ext cond, target
+#if defined(__APPLE__)
+        b.\cond .Lbce\@
+        b .Lbce_done\@
+.Lbce\@:
+        b \target
+.Lbce_done\@:
+#else
+        b.\cond \target
+#endif
+        .endm
+
+/* Load the C global lisp_nil into dest (then usually ldr dest,[dest]).
+ * Darwin/arm64 forbids text relocations from `ldr Rd, =sym`; use ADRP. */
+        .macro load_addr_of_lisp_nil dest
+#if defined(__APPLE__)
+        adrp    \dest, C(lisp_nil)@PAGE
+        add     \dest, \dest, C(lisp_nil)@PAGEOFF
+#else
+        ldr     \dest, =C(lisp_nil)
+#endif
+        .endm
+
         .macro clear_allocptr_tag
         bic allocptr, allocptr, #fulltagmask
         .endm
@@ -75,4 +102,10 @@ _SP\name:
 
         .macro extract_header dest, miscobj
         ldur \dest, [\miscobj, #misc_header_offset]
+        .endm
+
+/* Branch to a tagged code-vector entry point.  W^X: code is executable
+   at its canonical VA (purify RX or MAP_JIT); no address bias. */
+        .macro br_codevector reg
+        br \reg
         .endm

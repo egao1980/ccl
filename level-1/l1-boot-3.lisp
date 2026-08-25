@@ -44,5 +44,12 @@
 (setq cmain xcmain)
 (setq %err-disp %xerr-disp)
 
+;;; darwinarm64: heaps may still carry pre-x9 callback trampolines
+;;; (index in x8).  Patch before any process-interrupt / UUO→lisp path.
+#+arm64-target
+(progn
+  (fix-arm64-callback-trampolines-for-x9)
+  (pushnew 'fix-arm64-callback-trampolines-for-x9 *restore-lisp-functions*))
+
 ;;;end of l1-boot-3.lisp
 

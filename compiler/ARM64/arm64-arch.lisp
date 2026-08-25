@@ -845,20 +845,17 @@
   backlink
   type)
 
-;;; The frame the callback trampoline (.SPeabi-callback) builds for a
-;;; foreign caller, described relative to CBF = &x0save (16-aligned).
-;;; Frame layouts belong here -- ppc64-arch.lisp:588/595 and
-;;; arm-arch.lisp:921 keep lisp-frame/c-frame savelr in the arch file --
-;;; and they must be defined before the lib/ modules compile, because the
-;;; callback generators in lib/ffi-{linux,darwin}arm64.lisp splice them at
-;;; macroexpansion time (the DEFCALLBACK path in l1-lisp-threads.lisp).
-;;;   x0..x7 saves at   +0..+56   (CBF = sp after the arg-reg push)
+;;; The frame .SPcallback builds for a foreign caller, relative to
+;;; CBF = &x0save (16-aligned).  Generators in lib/ffi-{linux,darwin}arm64.lisp
+;;; splice these offsets at defcallback macroexpansion time.
+;;;   x0..x7 saves at   +0..+56
 ;;;   C caller's stack args, contiguous, at +64
-;;;   d0..d7 saves at   -64..-8
-;;;   callee-saved GPR pairs below that, x29/LR last at -160,
-;;;   so the saved LR (the foreign caller's return address) is at -152.
-(defconstant callback-frame.fp-save-offset -64)
-(defconstant callback-frame.savelr-offset -152)
+;;;   AAPCS64 x8 sret pointer saved at -16 (between GPR and FP blocks)
+;;;   d0..d7 saves at   -80..-24
+;;;   callee-saved GPR pairs below that; x29/LR at -176/-168
+(defconstant callback-frame.fp-save-offset -80)
+(defconstant callback-frame.sret-offset -16)
+(defconstant callback-frame.savelr-offset -168)
 (defconstant callback-frame.stack-args-offset 64)
 
 (defmacro define-header (name element-count subtag)
@@ -1250,7 +1247,9 @@
            (= ,fulltag arm64::fulltag-symbol)
            (= ,typecode arm64::subtag-instance)))))
 
-;;; xxx --- these references will need to be relative to rnil
+;;; xxx --- prefer rnil-relative (ref-global) long-term.  Absolute form
+;;; must use the *target* nil-value (Darwin: #x20000100b after
+;;; tools/xdarwinarm64.lisp patches the arch).
 (defarm64archmacro ccl::%get-kernel-global (name)
   `(ccl::%fixnum-ref 0 (+ ,(ccl::target-nil-value)
                         ,(%kernel-global
