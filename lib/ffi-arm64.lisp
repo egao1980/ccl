@@ -1,7 +1,7 @@
 ;;;-*- Mode: Lisp; Package: CCL -*-
 ;;;
 ;;; Copyright 2026 (CCL ARM64 port)
-;;; Based on vendor/ccl/lib/ffi-linuxppc64.lisp (Copyright 2007-2009 Clozure Associates)
+;;; Based on lib/ffi-linuxppc64.lisp (Copyright 2007-2009 Clozure Associates)
 ;;;
 ;;; Licensed under the Apache License, Version 2.0 (the "License");
 ;;; you may not use this file except in compliance with the License.
