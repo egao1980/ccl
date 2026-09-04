@@ -104,15 +104,8 @@ _SP\name:
         ldur \dest, [\miscobj, #misc_header_offset]
         .endm
 
-/* Darwin W^X: purify RX + MAP_JIT; dynamic heap never executable. */
+/* Branch to a tagged code-vector entry point.  W^X: code is executable
+   at its canonical VA (purify RX or MAP_JIT); no address bias. */
         .macro br_codevector reg
-#if defined(__APPLE__) && DARWIN_ARM64_DUAL_MAP
-        lsr imm0, \reg, #40
-        cmp imm0, #0x30
-        b.ne 0f
-        movz imm0, #0x40, lsl #32
-        add \reg, \reg, imm0
-0:
-#endif
         br \reg
         .endm

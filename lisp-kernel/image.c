@@ -444,7 +444,9 @@ load_openmcl_image(int fd, openmcl_image_file_header *h)
            Span must be OS-page-aligned (16KiB on Apple Silicon). */
         if (a->active > a->low) {
           natural span = align_to_power_of_2(a->active - a->low, log2_page_size);
-          mprotect(a->low, span, PROT_READ|PROT_EXEC);
+          if (mprotect(a->low, span, PROT_READ|PROT_EXEC) != 0) {
+            Fatal(": Couldn't map readonly area executable", "");
+          }
         }
 #endif
         readonly_area = a;

@@ -788,7 +788,6 @@
        (let ((info (make-objc-method-signature-info :type-signature sig)))
          (setf (objc-method-signature-info-function info)
                ;; Lazy compile on first use.  ARGS is (receiver selector . msg-args).
-               ;; Arm64: never APPLY onto the send function (see %invoke-objc-send-function).
                (lambda (&rest args)
                  (declare (dynamic-extent args))
                  (let ((f (handler-case
@@ -950,33 +949,15 @@
                   (symbol-name name) args))))))
                                              
 
-;;; Arm64 call-next-method hazards (see tools/darwin-cocoa-apps/09-*):
-;;; 1) rlet of :objc_super in a &rest frame is clobbered by apply's stack
-;;;    traffic (super_class → garbage → objc_msgSendSuper hang/recurse on
-;;;    #/init).  Keep the super struct on the heap.
-;;; 2) (apply send-fn …) AND (apply #'%call-next-objc-method …) corrupt
-;;;    nested ff-call scalar returns (Lisp→Lisp :<BOOL> → coerce-from-bool
-;;;    garbage; IDE File-menu validateMenuItem: death).  Never APPLY onto
-;;;    the send function; the objc:defmethod flet must pass the &rest list
-;;;    as one argument (see objc-runtime.lisp).
+;;; Arm64 call-next-method note (see tools/darwin-cocoa-apps/09-*):
+;;; rlet of :objc_super in a &rest frame was clobbered by apply's stack
+;;; traffic (super_class → garbage → objc_msgSendSuper hang/recurse on
+;;; #/init); the super struct stays on the heap (make-record below).
+;;; The bring-up-era APPLY ban (fixed-arity CASE with a 6-arg cap) is
+;;; gone: the "nested ff-call scalar return corruption" it papered over
+;;; was the GC-invisible ff-call state bug, fixed in .SPffcall.
 (defun %invoke-objc-send-function (function receiver selector args)
-  (let ((n (length args)))
-    (declare (fixnum n))
-    (case n
-      (0 (funcall function receiver selector))
-      (1 (funcall function receiver selector (car args)))
-      (2 (funcall function receiver selector (car args) (cadr args)))
-      (3 (funcall function receiver selector
-                  (car args) (cadr args) (caddr args)))
-      (4 (funcall function receiver selector
-                  (car args) (cadr args) (caddr args) (cadddr args)))
-      (5 (funcall function receiver selector
-                  (car args) (cadr args) (caddr args) (cadddr args)
-                  (nth 4 args)))
-      (6 (funcall function receiver selector
-                  (car args) (cadr args) (caddr args) (cadddr args)
-                  (nth 4 args) (nth 5 args)))
-      (t (error "%invoke-objc-send-function: ~d args not supported" n)))))
+  (apply function receiver selector args))
 
 (defun %call-next-objc-method-apply (self class selector sig args)
   "ARGS is a list of message arguments (not &rest). Used by call-next-method."

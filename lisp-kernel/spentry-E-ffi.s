@@ -47,9 +47,9 @@
 
 /*
  * ===========================================================================
- * PROPOSED-CONSTANTS (ratify with Matt)
+ * LOCAL CONSTANTS
  * ---------------------------------------------------------------------------
- * NOT in arm64-constants.h.  Values DERIVED from the cited sources; the C
+ * NOT in arm64-constants.h.  Values derived from the cited sources; the C
  * runtime and compiler must agree.
  * ===========================================================================
  */
@@ -213,7 +213,7 @@ _ends
    uuo_misc 4 at pin 9c61574 -- it was misc 3 @115b7aa, before
    uuo_debug_trap was inserted at 3.  We invoke the MACRO, so the renumber
    costs nothing; only a hardcoded number would have broken.  Stack-overflow
-   sites use the PROPOSED uuo_interr extension. */
+   sites use the uuo_interr extension. */
 .set error_stack_overflow, 5            /* errors.s:25 */
 .macro check_pending_interrupt
         ldr nargs, [rcontext, #tcr.tlb_pointer]
@@ -247,7 +247,7 @@ _ends
  * whose macptr is passed in arg_y, before returning to lisp (ppc:1796
  * poweropen_ffcall_return_registers; needed because several C result
  * registers are dedicated lisp registers).
- * PROPOSED buffer layout (RATIFY - lisp-side ff-call glue must match):
+ * Buffer layout (lisp-side ff-call glue matches):
  *   [0..56]   x0..x7   (8 GPRs; PPC stores its 8 GPR args/results)
  *   [64..120] d0..d7   (8 FPRs; PPC stores f1-f13 - AAPCS64 result FPRs
  *                       are d0-d7, so 8 doubles here)
@@ -256,7 +256,13 @@ _ends
  * at the return; save2 carries the buffer address across the call
  * (callee-saved), parked on the vstack like save3/fn. */
 spentry ffcall_return_registers
+        /* Spill ALL boxed NVRs (fn + save0/save1; save2/save3 are pushed
+         * below where they gain kernel roles): a thread in a synchronous
+         * ff-call has gc_context = NULL, so the GC sees only the vstack.
+         * See the canonical note in `spentry ffcall' (arm64-spentry.s). */
         str fn, [vsp, #-node_size]!             /* ppc:1799 vpush_saveregs   */
+        str save0, [vsp, #-node_size]!
+        str save1, [vsp, #-node_size]!
         str save3, [vsp, #-node_size]!
         mov save3, sp
         /* Park lr in the boundary lisp_frame his alloc-c-frame RESERVED at the
@@ -315,7 +321,8 @@ spentry ffcall_return_registers
          * grows BELOW its incoming SP, so popping the frame here hands
          * the saved lr/backlink to the callee as scratch (16m5c crash in
          * the _SPffcall twin: return jumped into the c_frame).  Stack-arg
-         * layout = ratify item (frame head must move above params). */
+         * layout: frame head must move above params (not yet needed —
+         * the w13 codegen rejects stack args loudly). */
         /* Boundary bookkeeping + valence, identical to `spentry ffcall' in
          * arm64-spentry.s -- see the protocol note at the top of this file.
          * temp0, not imm0: imm0 is x0, now an outgoing argument. */
@@ -360,8 +367,12 @@ spentry ffcall_return_registers
         ldr imm2, [save3, #c_frame.params]
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
+        /* Reload the boxed NVRs from the vstack — the GC may have moved
+         * the objects they reference while we were foreign. */
         ldr save2, [vsp], #node_size
         ldr save3, [vsp], #node_size
+        ldr save1, [vsp], #node_size
+        ldr save0, [vsp], #node_size
         ldr fn, [vsp], #node_size
         mov arg_w, rnil
         mov arg_x, rnil
@@ -396,11 +407,11 @@ endsp callbackX
  * "frame pointer" fixnum from which the lisp glue reads the C arguments
  * and into which it writes the C result.
  *
- * PROPOSED-CONVENTION CALLBACK-IDX (RATIFY): the make-callback trampoline
- * stub enters here with the UNBOXED callback index in x9 (arg_x).  x8
- * (arg_w) is left alone so AAPCS64's indirect-result pointer survives;
- * .SPcallback spills it at CBF-16.  (Older trampolines stamped x8 and
- * destroyed sret — fixed with level-1/arm64-callback-support.lisp.)
+ * CALLBACK-IDX convention: the make-callback trampoline stub enters here
+ * with the UNBOXED callback index in x9 (arg_x).  x8 (arg_w) is left
+ * alone so AAPCS64's indirect-result pointer survives; .SPcallback
+ * spills it at CBF-16.  (Older trampolines stamped x8 and destroyed
+ * sret — fixed with level-1/arm64-callback-support.lisp.)
  *
  * Frame contract (lisp-side callback glue must match arm64-arch.lisp
  * callback-frame.*): x0..x7 pushed so the x0 slot abuts the incoming
@@ -410,13 +421,13 @@ endsp callbackX
  * ARM64-DEVIATION (vs PPC64 poweropen_callback):
  *   - callee-saved set = x19-x28 + fp/lr and d8-d15 (+FPCR/FPSR pair), NOT
  *     PPC's r13-r31/f-block; lisp may clobber d8-d15, so they are saved
- *     here (RATIFY: alternatively restrict Matt's compiler FPR pool).
+ *     here (alternative: restrict the compiler's FPR pool).
  *   - get_tcr is reached by a direct `bl` (kernel-internal symbol;
  *     PPC indirects through a lisp_global for TOC reasons, ppc:5115).
  *   - save0-3 enter lisp as 0 (valid fixnums; our v2-validated choice)
  *     rather than PPC's restore_saveregs-from-vstack (ppc:5149).  The
  *     outer ffcall reloads its own save0-3 from its vstack spill, so
- *     values are never lost.  RATIFY if Matt wants PPC's reload.
+ *     values are never lost.
  */
 spentry callback
         /* Save the C argument registers so the lisp glue can read them
@@ -582,7 +593,12 @@ endsp callback
  * lisp<->foreign transition) with the AArch64 syscall sequence
  * in the middle instead of a call. */
 spentry syscall
+        /* Spill ALL boxed NVRs — same GC-visibility contract as ffcall
+         * (canonical note in `spentry ffcall', arm64-spentry.s). */
         str fn, [vsp, #-node_size]!             /* ppc:5404 vpush_saveregs   */
+        str save0, [vsp, #-node_size]!
+        str save1, [vsp, #-node_size]!
+        str save2, [vsp, #-node_size]!
         str save3, [vsp, #-node_size]!
         mov save3, sp
         /* Park lr in the boundary lisp_frame his alloc-c-frame RESERVED at the
@@ -659,7 +675,12 @@ spentry syscall
         ldr imm2, [save3, #c_frame.params]
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
+        /* Reload the boxed NVRs from the vstack — the GC may have moved
+         * the objects they reference while we were foreign. */
         ldr save3, [vsp], #node_size
+        ldr save2, [vsp], #node_size
+        ldr save1, [vsp], #node_size
+        ldr save0, [vsp], #node_size
         ldr fn, [vsp], #node_size
         mov arg_w, rnil                         /* ppc:5461-5468             */
         mov arg_x, rnil
@@ -689,7 +710,7 @@ endsp syscall
  * caller, hiding the variable-length arglist; if the caller's caller
  * expects one value, take the simpler path.
  *
- * PROPOSED-CONVENTION LEXPR-RA (RATIFY): PPC compares/keeps the CALLER's
+ * LEXPR-RA convention: PPC compares/keeps the CALLER's
  * return pc in loc_pc, while lr holds the return-to-prologue from the
  * `bla' - two live return addresses.  Matt's map has no loc_pc (x24=tsp),
  * so the lexpr function's prologue must pass the caller's return pc in

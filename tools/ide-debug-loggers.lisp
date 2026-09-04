@@ -1,12 +1,25 @@
-;;; Frame-only no-class-error logger + safer %show-stack-frame-label.
-;;; Avoid loading full cocoa-utils.lisp into a live IDE (too many redefs).
+;;;; Opt-in diagnostic loggers for the darwinarm64 BOGUS-object issue.
+;;;;
+;;;;   (load "ccl:tools;ide-debug-loggers.lisp")
+;;;;
+;;;; Installs a no-class-error hook that appends a frame-name-only
+;;;; backtrace to /tmp/ccl-no-class-error.log before re-signaling with a
+;;;; BOGUS-safe message, plus %log-hemlock-condition for Hemlock error
+;;;; forensics (/tmp/ccl-hemlock-err.log).  Frame names only — formatting
+;;;; stack arg slots with ~s can hit BOGUS objects and turn one error
+;;;; into a CLASS-OF cascade.
+;;;;
+;;;; This file must NOT be loaded by product code or shipped images.
+
 (in-package :cl-user)
 
 (eval-when (:compile-toplevel :load-toplevel :execute)
   (unless (find-package :gui)
-    (error "ide-noclass-bt-patch: GUI package missing (not a cocoa image?)")))
+    (error "ide-debug-loggers: GUI package missing (not a cocoa image?)")))
 
-;;; --- lib/backtrace.lisp: never ~s stack args when detailed-p is NIL ---
+;;; --- lib/backtrace.lisp hardening (also in current sources; harmless
+;;; --- to re-load into older images): never ~s stack args when
+;;; --- detailed-p is NIL.
 (in-package :ccl)
 (defun %show-stack-frame-label (frame-number p context lfun pc detailed-p)
   (flet ((frame-label ()
@@ -26,8 +39,20 @@
                (if (exception-frame-p p) #\* #\space)
                (index->address p) frame-number (frame-label) pc)))))
 
-;;; --- cocoa-utils logger bits ---
 (in-package :gui)
+
+(defvar *%original-no-class-error* nil)
+(defvar *%logging-no-class-error* nil)
+
+(defun %safe-object-id (x)
+  "Identify X without CLASS-OF / printing its contents (arm64 BOGUS-safe)."
+  (or (ignore-errors
+        (format nil "tag=~s typecode=~s addr=#x~x bogus=~s"
+                (ccl::lisptag x)
+                (ccl::typecode x)
+                (ccl::%address-of x)
+                (ccl::bogus-thing-p x)))
+      "#<unprintable>"))
 
 (defun %safe-frame-name (lfun)
   (or (ignore-errors (function-name lfun))
@@ -96,10 +121,12 @@
                       (write-line line s))
                     (terpri s)
                     (force-output s)))))
+            ;; Re-signal with a BOGUS-safe message (avoid ~s on the datum in
+            ;; case write-internal/class-of recurses on some corrupt headers).
             (error "Bug (probably): can't determine class of object ~a"
                    (%safe-object-id x))))))
 
 (%install-no-class-error-logger :force t)
 
 (in-package :cl-user)
-(format t "~&;; ide-noclass-bt-patch loaded (log → /tmp/ccl-no-class-error.log)~%")
+(format t "~&;; ide-debug-loggers loaded (→ /tmp/ccl-no-class-error.log)~%")

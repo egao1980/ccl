@@ -32,8 +32,8 @@ cd lisp-kernel/darwinarm64 && make clean && make
 (rebuild-ccl :full t)          # twice for self-host proof
 
 ./tools/run-darwin-arm64-ci.sh
-./tools/run-darwin-arm64-test-suites.sh   # ccl-tests + ANSI
 ./tools/run-darwin-smoke.sh 120 tools/darwin-clean-build-smoke.lisp
+# ccl-tests + ANSI suites: run from a ccl-tests checkout against ./darm64cl
 ```
 
 Companion ccl-tests: https://github.com/egao1980/ccl-tests

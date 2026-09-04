@@ -204,9 +204,20 @@ C(misc_ref_common):
  * this spentry owns is the right seam.
  */
 spentry ffcall
+        /* Spill ALL boxed NVRs (fn + save0-save3) to the vstack: a thread
+         * in a synchronous ff-call has gc_context = NULL (arm64-exceptions.c
+         * gc_like_from_xp), so the GC sees ONLY the vstack — anything left
+         * in x19-x22 is invisible while foreign and stale after a compacting
+         * GC (root cause of the launch-window BOGUS/stale-pointer bugs:
+         * e.g. an autorelease-pool macptr held in save0 across the event
+         * loop's ff-calls).  C preserves the callee-saved BITS, but bits
+         * are not roots.  PPC precedent: vpush_saveregs (ppc-spentry.s
+         * poweropen_ffcall).  Reload (not restore) after the call. */
         str fn, [vsp, #-node_size]!
-        /* save3 carries the frame base across the call (callee-saved);
-         * its lisp value is parked next to fn. */
+        str save0, [vsp, #-node_size]!
+        str save1, [vsp, #-node_size]!
+        str save2, [vsp, #-node_size]!
+        /* save3 also carries the frame base across the call (callee-saved). */
         str save3, [vsp, #-node_size]!
         mov save3, sp
         /* ---- THE BOUNDARY LISP FRAME (16m30; canonical note, the two
@@ -296,12 +307,18 @@ spentry ffcall
         lsr temp1, temp0, #num_subtag_bits      /* count after shrink */
         add temp2, temp1, #1
         add temp2, save3, temp2, lsl #node_shift /* boundary lisp_frame */
+        /* The vstack is a PURE NODE area (GC scans + check_all_areas
+         * verify every word).  Cstack addresses are 16-aligned (= even
+         * fixnums, safe), but a raw return PC has residue 4/8/12 and
+         * would be scanned as a header/pointer: park it BOXED as a
+         * fixnum (lr << fixnumshift) and unbox on reload. */
         ldr temp0, [rcontext, #tcr.last_lisp_frame]
         str temp0, [vsp, #-node_size]!          /* enclosing boundary */
         ldr temp0, [save3, #c_frame.savedsp]
         str temp0, [vsp, #-node_size]!          /* caller SP */
         ldr temp0, [temp2, #lisp_frame.savelr]
-        str temp0, [vsp, #-node_size]!          /* return lr */
+        lsl temp0, temp0, #fixnumshift
+        str temp0, [vsp, #-node_size]!          /* return lr (fixnum-boxed) */
         str vsp, [temp2, #lisp_frame.savevsp]
         str vsp, [rcontext, #tcr.save_vsp]
         cmp temp1, #9
@@ -329,11 +346,17 @@ spentry ffcall
         ldr allocbase, [rcontext, #tcr.save_allocbase]
         /* Restore from vstack parks (c_frame may be callee trash). */
         ldr lr, [vsp], #node_size
+        lsr lr, lr, #fixnumshift                /* unbox the parked pc */
         ldr imm1, [vsp], #node_size             /* savedsp */
         ldr imm2, [vsp], #node_size             /* enclosing boundary */
         str imm2, [rcontext, #tcr.last_lisp_frame]
         mov sp, imm1
+        /* Reload the boxed NVRs from the vstack — the GC may have moved
+         * the objects they reference while we were foreign. */
         ldr save3, [vsp], #node_size
+        ldr save2, [vsp], #node_size
+        ldr save1, [vsp], #node_size
+        ldr save0, [vsp], #node_size
         ldr fn, [vsp], #node_size
         /* Clear C garbage out of the volatile node registers, then --
          * and only then -- declare lisp valence: the GC must never see

@@ -14,6 +14,10 @@ IMG=/tmp/darm64cl-purify-test.image
 LOG=/tmp/darwin-purify-smoke.log
 TIMEOUT="${CCL_SMOKE_TIMEOUT:-60}"
 WT="$CCL_DIR/tools/with-timeout"
+# The child image lives in /tmp; without this, "ccl:" resolves to /tmp and
+# interface databases (#_getpid) are not found.
+CCL_DEFAULT_DIRECTORY="$CCL_DIR"
+export CCL_DEFAULT_DIRECTORY
 
 rm -f "$IMG"
 "$WT" "$TIMEOUT" ./darm64cl --no-init --batch \

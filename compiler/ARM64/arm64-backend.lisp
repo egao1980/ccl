@@ -284,10 +284,6 @@
 
 (defvar *arm64-backend* (car *known-arm64-backends*))
 
-;;; Darwin/arm64: code runs at the canonical VA (purify RX + MAP_JIT).
-(defun darwinarm64-heap-exec-bias-p ()
-  nil)
-
 (defun fixup-arm64-backend ()
   (dolist (b *known-arm64-backends*)
     (setf (backend-lap-opcodes b) #()
@@ -455,9 +451,14 @@
     (labels ((walk (ty base)
                (cond ((typep ty 'foreign-record-type)
                       (ensure-foreign-type-bits ty)
-                      (dolist (f (foreign-record-type-fields ty))
-                        (walk (foreign-record-field-type f)
-                              (+ base (foreign-record-field-offset f)))))
+                      ;; Union members alias the same storage; walking them
+                      ;; all would double-count leaves.  Classify unions as
+                      ;; non-HFA (:other -> GPR/memory by size).
+                      (if (eq (foreign-record-type-kind ty) :struct)
+                        (dolist (f (foreign-record-type-fields ty))
+                          (walk (foreign-record-field-type f)
+                                (+ base (foreign-record-field-offset f))))
+                        (leaves (cons :other (ash base -3)))))
                      ((typep ty 'foreign-array-type)
                       (let* ((el (foreign-array-type-element-type ty))
                              (dims (foreign-array-type-dimensions ty))
@@ -507,9 +508,11 @@
              (not (typep rtype 'unsigned-byte))
              (not (member rtype *foreign-representation-type-keywords*
                           :test #'eq)))
+    ;; Parse errors propagate: silently classifying an unparseable type
+    ;; as "not memory" would miscompile the call.
     (let* ((ftype (if (typep rtype 'foreign-type)
                     rtype
-                    (ignore-errors (parse-foreign-type rtype)))))
+                    (parse-foreign-type rtype))))
       (and (typep ftype 'foreign-record-type)
            (eq (arm64::classify-record-return ftype) :memory)))))
 
@@ -558,16 +561,17 @@ Composite returns:
   :hfa / :gpr -> :registers regbuf + unpack (never a fake x0 result pointer)
   :memory     -> :structure-return buffer (callee writes via x8)
 
-Composite args:
-  HFA         -> N :single-float / :double-float field loads
-  <=128 bits   -> N :unsigned-doubleword GPR loads
+Composite args (each one ATOMIC — AAPCS64 never splits a composite
+between registers and stack):
+  HFA         -> (rep . count) spec + the composite's address
+  <=64 bits    -> one :unsigned-doubleword
+  <=128 bits   -> numeric word-count spec + the composite's address
   larger      -> :address (by reference)"
   (let* ((result-type-spec (or (car (last args)) :void))
          (regbuf nil)
          (result-temp nil)
          (result-form nil)
-         (struct-result-type nil)
-         (structure-arg-temp nil))
+         (struct-result-type nil))
     (multiple-value-bind (result-type error)
         (ignore-errors (parse-foreign-type result-type-spec))
       (if error
@@ -610,19 +614,13 @@ Composite args:
                   (multiple-value-bind (hfa-rep hfa-count)
                       (arm64::record-hfa-info ftype)
                     (cond (hfa-rep
-                           (unless structure-arg-temp
-                             (setq structure-arg-temp (gensym)))
-                           (let* ((leaves (arm64::hfa-leaf-reps ftype))
-                                  (valform `(%setf-macptr ,structure-arg-temp
-                                                          ,arg-value-form)))
-                             (dotimes (i hfa-count)
-                               (argforms hfa-rep)
-                               (argforms `(,(if (eq hfa-rep :double-float)
-                                              '%get-double-float
-                                              '%get-single-float)
-                                           ,valform
-                                           ,(cdr (nth i leaves))))
-                               (setq valform structure-arg-temp))))
+                           ;; One atomic HFA argument: all fields in
+                           ;; consecutive FPRs, or the whole aggregate in
+                           ;; memory (AAPCS64 C.3) — decided at code-gen.
+                           ;; QUOTED: a bare dotted pair would be walked as
+                           ;; a call form by nx-transform-arglist.
+                           (argforms (list 'quote (cons hfa-rep hfa-count)))
+                           (argforms arg-value-form))
                           (t
                            (let* ((bits (ensure-foreign-type-bits ftype)))
                              (cond ((<= bits 64)
@@ -630,17 +628,11 @@ Composite args:
                                     (argforms `(%%get-unsigned-longlong
                                                 ,arg-value-form 0)))
                                    ((<= bits 128)
-                                    (unless structure-arg-temp
-                                      (setq structure-arg-temp (gensym)))
-                                    (let* ((nwords (ceiling bits 64))
-                                           (valform `(%setf-macptr
-                                                      ,structure-arg-temp
-                                                      ,arg-value-form)))
-                                      (dotimes (i nwords)
-                                        (argforms :unsigned-doubleword)
-                                        (argforms `(%%get-unsigned-longlong
-                                                    ,valform ,(* i 8)))
-                                        (setq valform structure-arg-temp))))
+                                    ;; One atomic 2-word composite: both
+                                    ;; words in GPRs or both on the stack
+                                    ;; (AAPCS64 C.12) — decided at code-gen.
+                                    (argforms (ceiling bits 64))
+                                    (argforms arg-value-form))
                                    (t
                                     (argforms :address)
                                     (argforms arg-value-form)))))))
@@ -650,11 +642,6 @@ Composite args:
         (argforms (foreign-type-to-representation-type result-type))
         (let ((call (funcall result-coerce result-type-spec
                              `(,@callform ,@(argforms)))))
-          (when structure-arg-temp
-            (setq call `(let* ((,structure-arg-temp (%null-ptr)))
-                          (declare (dynamic-extent ,structure-arg-temp)
-                                   (type macptr ,structure-arg-temp))
-                          ,call)))
           (if regbuf
             `(let* ((,result-temp (%null-ptr)))
                (declare (dynamic-extent ,result-temp)

@@ -369,14 +369,16 @@ present and false otherwise. This variable shouldn't be set by user code.")
       (bin-load-provide "FFI-ANDROIDARM" "ffi-androidarm")
       #+(and arm-target darwin-target)
       (bin-load-provide "FFI-DARWINARM" "ffi-darwinarm")
-      #+(and arm64-target linux-target)
-      (bin-load-provide "FFI-LINUXARM64" "ffi-linuxarm64")
-      #+(and arm64-target darwin-target)
-      ;; ffi-darwinarm64 (require "FFI-LINUXARM64") — load the fasl first.
+      ;; The OS files (require "FFI-ARM64") — load the shared fasl first.
       ;; Falling back to .lisp source hits parse-file-options-line →
       ;; STRING-TRIM before MISC is loaded.
+      #+(and arm64-target linux-target)
       (progn
-        (bin-load-provide "FFI-LINUXARM64" "ffi-linuxarm64")
+        (bin-load-provide "FFI-ARM64" "ffi-arm64")
+        (bin-load-provide "FFI-LINUXARM64" "ffi-linuxarm64"))
+      #+(and arm64-target darwin-target)
+      (progn
+        (bin-load-provide "FFI-ARM64" "ffi-arm64")
         (bin-load-provide "FFI-DARWINARM64" "ffi-darwinarm64"))
 
 

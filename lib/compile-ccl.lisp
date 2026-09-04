@@ -191,10 +191,9 @@
                         (:darwinarm 'ffi-darwinarm)
                         (:darwinarm64 'ffi-darwinarm64)
                         (:linuxarm64 'ffi-linuxarm64))))
-            ;; Darwin arm64 reuses AAPCS64 callback generators from the
-            ;; Linux module; cold-load must have that fasl (not .lisp).
-            (if (eq target :darwinarm64)
-              (list 'ffi-linuxarm64 ffi)
+            ;; Both arm64 targets share the AAPCS64 module.
+            (if (memq target '(:darwinarm64 :linuxarm64))
+              (list 'ffi-arm64 ffi)
               (list ffi)))))
 
 
@@ -614,51 +613,6 @@ not runtime errors reported by a successfully created process."
           (lisp-implementation-version))
   (format stream "~&Path to source code: ~s" (truename "ccl:")))
 
-#+darwinarm64-target
-(defun %darwinarm64-shell-quote (string)
-  (with-output-to-string (out)
-    (write-char #\' out)
-    (loop for c across string
-          do (if (char= c #\')
-               (write-string "'\\''" out)
-               (write-char c out)))
-    (write-char #\' out)))
-
-#+darwinarm64-target
-(defun %darwinarm64-cross-xload-boot-image ()
-  "Optional Rosetta fallback.  Prefer native xload-level-0 (Darwin nil-value
-is fixed in arm64-backend); kept for hosts that lack a working native
-xload toolchain."
-  (let* ((dx86 (probe-file "ccl:ccl;dx86cl64"))
-         (script (probe-file "ccl:tools;bootstrap-darwinarm64-boot.lisp")))
-    (unless dx86
-      (error "darwinarm64 cross-xload needs ./dx86cl64"))
-    (unless script
-      (error "missing ~s" "ccl:tools;bootstrap-darwinarm64-boot.lisp"))
-    (format t "~&;Cross-xloading arm64-boot.image via Rosetta dx86cl64 ...")
-    (force-output)
-    (let* ((dir (native-translated-namestring (truename "ccl:")))
-           (dx86n (native-translated-namestring dx86))
-           (scriptn (native-translated-namestring script))
-           (cmd (format nil
-                        "export CCL_DEFAULT_DIRECTORY=~a; exec arch -x86_64 ~a --no-init --batch < ~a"
-                        (%darwinarm64-shell-quote dir)
-                        (%darwinarm64-shell-quote dx86n)
-                        (%darwinarm64-shell-quote scriptn))))
-      (with-output-to-string (s)
-        (let* ((proc (run-program "/bin/sh" (list "-c" cmd)
-                                  :output s :error :output)))
-          (multiple-value-bind (status exit-code)
-              (external-process-status proc)
-            (unless (and (eq :exited status) (eql exit-code 0))
-              (error "darwinarm64 cross-xload failed (~s ~s):~%~a"
-                     status exit-code (get-output-stream-string s)))
-            (unless (probe-file (standard-boot-image-name))
-              (error "cross-xload did not write ~s"
-                     (standard-boot-image-name)))
-            (format t "~&;Wrote bootstrapping image: ~s"
-                    (truename (standard-boot-image-name)))))))))
-
 (defun %build-lisp-kernel (&key clean (extra-make-args nil) verbose)
   "Run make in lisp-kernel/<platform>.  EXTRA-MAKE-ARGS is a list of
 additional make arguments."
@@ -731,21 +685,6 @@ the lisp and run REBUILD-CCL again.")
                (%enable-darwinarm64-map-jit-fasls))
              (with-global-optimization-settings ()
                (compile-ccl (not (null force)))
-               ;; Native xload: Darwin nil-value is owned by
-               ;; *darwinarm64-target-arch* (not the shared linux #x1300b).
-               #+darwinarm64-target
-               (progn
-                 (ensure-darwinarm64-target-arch)
-                 (setq *arm64-backend* *darwinarm64-backend*
-                       *host-backend* *darwinarm64-backend*
-                       *target-backend* *darwinarm64-backend*)
-                 (format t "~&;Native xload-level-0 (nil=#x~x) ...~%"
-                         (arch::target-nil-value
-                          (backend-target-arch *host-backend*)))
-                 (force-output)
-                 (gc)
-                 (if force (xload-level-0 :force) (xload-level-0)))
-               #-darwinarm64-target
                (if force (xload-level-0 :force) (xload-level-0)))
              (when kernel
                (%build-lisp-kernel :clean (or clean force) :verbose verbose))
@@ -753,29 +692,9 @@ the lisp and run REBUILD-CCL again.")
                (let* ((old-write-date
                        (or (ignore-errors (file-write-date (standard-image-name)))
                            0)))
-                 ;; Darwin save script: clear deferred-warnings + :purify t
-                 ;; (AREA_CODE → AREA_READONLY). Stock platforms use a
-                 ;; one-liner save-application.
                  (with-output-to-string (output)
                    (multiple-value-bind (status exit-code)
                        (external-process-status
-                        #+darwinarm64-target
-                        (let ((save-script
-                               (merge-pathnames "tools/save-darwinarm64-image.lisp"
-                                                (current-directory))))
-                          (unless (probe-file save-script)
-                            (error "missing ~s" save-script))
-                          (with-open-file (cmd save-script :direction :input)
-                            (run-program
-                             (format nil "./~a" (standard-kernel-name))
-                             (list* "--image-name" (standard-boot-image-name)
-                                    "--no-init"
-                                    "--batch"
-                                    reload-arguments)
-                             :input cmd
-                             :output output
-                             :error output)))
-                        #-darwinarm64-target
                         (with-input-from-string
                             (cmd (format nil "(save-application ~s)"
                                          (standard-image-name)))

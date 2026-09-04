@@ -768,8 +768,13 @@ signal_stack_soft_overflow(ExceptionInformation *xp, unsigned reg)
 
 void
 adjust_soft_protection_limit(area *a)
-{                                 /* ppc-exceptions.c:575-592 */
-  char *proposed_new_soft_limit = a->softlimit - 4096;
+{                                 /* ppc-exceptions.c:575-592.
+                                     ARM64-DEVIATION: step by the real
+                                     page size (16KiB on Darwin arm64,
+                                     4KiB elsewhere), not a hardcoded
+                                     4096, so the softlimit stays in sync
+                                     with mprotect granularity. */
+  char *proposed_new_soft_limit = a->softlimit - page_size;
   protected_area_ptr p = a->softprot;
 
   if (proposed_new_soft_limit >= (p->start+16384)) {
@@ -788,10 +793,11 @@ restore_soft_stack_limit(unsigned stkreg)
 
   switch (stkreg) {
   case Rsp:  /* ARM64-DEVIATION: PPC used sp=r1; AArch64 SP is not a
-                numbered GPR, selector Rsp=31 (see enum above). */
+                numbered GPR, selector Rsp=31 (see enum above).
+                Step by page_size (16KiB on Darwin arm64), not 4096. */
     a = tcr->cs_area;
-    if ((a->softlimit - 4096) > (a->hardlimit + 16384)) {
-      a->softlimit -= 4096;
+    if ((a->softlimit - page_size) > (a->hardlimit + 16384)) {
+      a->softlimit -= page_size;
     }
     tcr->cs_limit = (LispObj)ptr_to_lispobj(a->softlimit);
     break;
@@ -1064,107 +1070,6 @@ static void cold_load_dump_frame(ExceptionInformation *xp);
 static void uuo_describe_symbol(LispObj sym);
 
 #if defined(DARWIN) && defined(ARM64)
-/* Walk back from a heap PC looking for a 32-bit ivector header whose
-   payload covers that PC.  Headers are 16-byte-aligned; tagged
-   code-vector entry points are header+12 (low nibble fulltag_misc). */
-static Boolean
-darwin_arm64_pc_in_code_vector(natural pcval)
-{
-  natural probe, header, count, data_start, data_end;
-  unsigned st;
-  int i;
-
-  if (pcval < (natural)IMAGE_BASE_ADDRESS) {
-    return false;
-  }
-
-  /* Fast path: tagged misc pointer (normal code-vector entry). */
-  if ((pcval & fulltagmask) == fulltag_misc) {
-    natural p, nest_end;
-
-    header = *(natural *)(pcval - fulltag_misc);
-    st = (unsigned)(header & subtagmask);
-    if (st != subtag_code_vector && st != subtag_xcode_vector) {
-      return false;
-    }
-    count = header >> num_subtag_bits;
-    if (count < 2 || count > (1u << 20)) {
-      return false;
-    }
-    /* element 0 (udf #0 sentinel) sits one 32-bit word before the entry */
-    if (*(unsigned *)(pcval - 4) != 0) {
-      return false;
-    }
-    data_start = (pcval - fulltag_misc) + node_size;
-    data_end = data_start + (count * 4);
-    /* Reject extents that swallow the next heap object (seen: a
-       code-vector header whose count overlaps a following docstring). */
-    nest_end = data_end;
-    for (p = ((pcval - fulltag_misc) + 16) & ~(natural)15;
-         p + node_size < data_end;
-         p += 16) {
-      natural nh = *(natural *)p;
-      unsigned nst = (unsigned)(nh & subtagmask);
-      natural ncount = nh >> num_subtag_bits;
-      if (nst == subtag_simple_base_string &&
-          ncount >= 1 && ncount < 0x10000) {
-        unsigned *chars = (unsigned *)(p + node_size);
-        if (chars[0] >= 0x20 && chars[0] < 0x7f) {
-          nest_end = p;
-          break;
-        }
-      }
-    }
-    if (pcval >= nest_end) {
-      return false;
-    }
-    return true;
-  }
-
-  /* Interior PC: require a plausible nearby code-vector header whose
-     payload covers PC.  Cap extent so a forged header with a huge
-     element count cannot claim unrelated heap (e.g. docstrings). */
-  probe = pcval & ~(natural)15;
-  for (i = 0; i < 64; i++) {
-    if (probe < (natural)IMAGE_BASE_ADDRESS) {
-      break;
-    }
-    header = *(natural *)probe;
-    st = (unsigned)(header & subtagmask);
-    if (st == subtag_code_vector || st == subtag_xcode_vector) {
-      count = header >> num_subtag_bits;
-      if (count >= 2 && count <= (1u << 20) &&
-          (*(unsigned *)(probe + node_size) == 0)) {
-        natural p, nest_end;
-        data_start = probe + node_size;
-        data_end = data_start + (count * 4);
-        nest_end = data_end;
-        for (p = (probe + 16) & ~(natural)15;
-             p + node_size < data_end;
-             p += 16) {
-          natural nh = *(natural *)p;
-          unsigned nst = (unsigned)(nh & subtagmask);
-          natural ncount = nh >> num_subtag_bits;
-          if (nst == subtag_simple_base_string &&
-              ncount >= 1 && ncount < 0x10000) {
-            unsigned *chars = (unsigned *)(p + node_size);
-            if (chars[0] >= 0x20 && chars[0] < 0x7f) {
-              nest_end = p;
-              break;
-            }
-          }
-        }
-        if (pcval >= data_start && pcval < nest_end &&
-            (nest_end - data_start) <= (4u << 20)) {
-          return true;
-        }
-      }
-    }
-    probe -= 16;
-  }
-  return false;
-}
-
 static void
 darwin_arm64_describe_pc_object(natural pcval)
 {

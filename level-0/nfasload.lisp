@@ -1072,6 +1072,17 @@
   htab)
 
 
+;;; A symbol-tagged package-hash-table cell whose pname is not a simple
+;;; string means heap corruption (observed during darwinarm64 bring-up:
+;;; dangling pname => BOGUS object).  Fail loudly instead of silently
+;;; skipping the cell — silent skips let the corruption spread to the
+;;; next GC/purify cycle unobserved.  The message avoids printing the
+;;; object itself (CLASS-OF on a corrupt header would recurse).
+(defun %htab-corrupt-cell-error (s)
+  (error "Corrupt package hash-table cell: symbol-tagged object at #x~x ~
+          whose pname is not a simple string."
+         (%address-of s)))
+
 (defun %resize-htab (htab)
   (declare (optimize (speed 3) (safety 0)))
   (without-interrupts
@@ -1082,10 +1093,9 @@
      (let* ((nsyms 0))
        (declare (fixnum nsyms))
        (dovector (s old-vector)
-         ;; Skip symbol-tagged cells with unreadable pnames (seen on
-         ;; Darwin/arm64 during Hemlock compile — dangling pname ⇒ BOGUS).
-         (when (and (symbolp s)
-                    (simple-string-p (symbol-name s)))
+         (when (symbolp s)
+           (unless (simple-string-p (symbol-name s))
+             (%htab-corrupt-cell-error s))
            (incf nsyms)))
        (%initialize-htab htab 
                          (the fixnum (+ 
@@ -1100,17 +1110,16 @@
            (let* ((s (svref old-vector i)))
                (if (symbolp s)
                  (let* ((pname (symbol-name s)))
-                   (when (simple-string-p pname)
-                     (setf (svref 
-                            new-vector 
-                            (nth-value 
-                             2
-                             (%get-htab-symbol 
-                              pname
-                              (length pname)
-                              htab)))
-                           s)
-                     (incf nnew))))))
+                   (setf (svref 
+                          new-vector 
+                          (nth-value 
+                           2
+                           (%get-htab-symbol 
+                            pname
+                            (length pname)
+                            htab)))
+                         s)
+                   (incf nnew)))))
          htab)))))
         
 (defun hash-pname (str len)
@@ -1134,15 +1143,14 @@
       (declare (fixnum i idx))
       (when (symbolp elt)
         (let* ((pname (symbol-name elt)))
-          ;; Dead/corrupt package entries can be symbol-tagged with a
-          ;; non-string pname; skip them rather than TYPE-ERROR in LENGTH.
-          (when (simple-string-p pname)
-            (if (and 
-                 (= (the fixnum (length pname)) len)
-                 (dotimes (j len t)
-                   (unless (eq (schar str j) (schar pname j))
-                     (return))))
-              (return (values t (%symptr->symbol elt) i)))))))))
+          (unless (simple-string-p pname)
+            (%htab-corrupt-cell-error elt))
+          (if (and 
+               (= (the fixnum (length pname)) len)
+               (dotimes (j len t)
+                 (unless (eq (schar str j) (schar pname j))
+                   (return))))
+            (return (values t (%symptr->symbol elt) i))))))))
 
 (defun %get-htab-symbol (string len htab)
   (declare (optimize (speed 3) (safety 0)))

@@ -15,7 +15,11 @@ tags
 /.gdb*
 
 /*.image
+/*.image.*
 /*boot*
+/darm64cl.smoke-bin
+/tmp-bench/
+/darwin-x86-headers64
 
 /armcl
 /arm64cl

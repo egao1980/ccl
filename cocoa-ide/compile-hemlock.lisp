@@ -32,22 +32,9 @@
                  :type *hemlock-binary-file-extension*
                  :defaults *hemlock-binary-dir-pathname*))
 
-(defun %hemlock-rehash-packages ()
-  "Drop package-htab entries with unreadable pnames (see %resize-htab)."
-  (dolist (name '("HI" "HEMLOCK-INTERNALS" "HEMLOCK"))
-    (let ((pkg (find-package name)))
-      (when pkg
-        (%resize-htab (pkg.itab pkg))
-        (%resize-htab (pkg.etab pkg))))))
-
 (defun compile-and-load-hemlock-file (name &optional force)
   (let* ((source-pathname (hemlock-source-pathname name))
 	 (binary-pathname (hemlock-binary-pathname name)))
-    ;; Darwin/arm64: after loading main, HI itab can contain symbol-tagged
-    ;; cells with dead pnames; the next compile-file then dies in INTERN.
-    ;; Rehash (now safe) before echo — first large intern wave after main.
-    (when (equalp name "echo")
-      (%hemlock-rehash-packages))
     (when (or force
 	      (not (probe-file binary-pathname))
 	      (> (file-write-date source-pathname)

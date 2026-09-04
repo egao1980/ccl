@@ -160,8 +160,6 @@
     (ensure-directories-exist image-file)
     (ccl:copy-file (ccl::kernel-path) kernel-file :if-exists :supersede 
                    :preserve-attributes t)
-    ;; Bake arm64-safe logging even if an older fasl left :backtrace bound.
-    #+arm64-target (setq *log-callback-errors* t)
     (save-application image-file
 		      :application-class 'cocoa-ide
 		      #+windows-target #+windows-target

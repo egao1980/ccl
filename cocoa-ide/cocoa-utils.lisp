@@ -210,43 +210,7 @@
 ;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;;
 ;;
 
-;; :backtrace walks stack slots; on darwinarm64 those often contain BOGUS
-;; objects, and printing them becomes "can't determine class of #<BOGUS…>"
-;; (the Hemlock error sheet users see).  Default to message-only on arm64.
-;; Use SETQ after DEFVAR: a prebound :backtrace from an older fasl/image
-;; survives DEFVAR and would otherwise be baked into Clozure CL64.app.
 (defvar *log-callback-errors* :backtrace)
-#+arm64-target (setq *log-callback-errors* t)
-#-arm64-target (setq *log-callback-errors* :backtrace)
-
-(defun %safe-object-id (x)
-  "Identify X without CLASS-OF / printing its contents (arm64 BOGUS-safe)."
-  (or (ignore-errors
-        (format nil "tag=~s typecode=~s addr=#x~x bogus=~s"
-                (ccl::lisptag x)
-                (ccl::typecode x)
-                (ccl::%address-of x)
-                (ccl::bogus-thing-p x)))
-      "#<unprintable>"))
-
-(defun %log-hemlock-condition (condition &optional (path "/tmp/ccl-hemlock-err.log"))
-  "Append CONDITION summary + frame-only BT. Never walk stack arg slots."
-  (ignore-errors
-    (with-open-file (s path :direction :output
-                       :if-exists :append :if-does-not-exist :create)
-      (format s "~&==== ~a ====~%" (get-universal-time))
-      (format s "condition-class=~s~%"
-              (ignore-errors (class-name (class-of condition))))
-      (format s "emsg=~a~%"
-              (or (ignore-errors (princ-to-string condition)) "<unprintable>"))
-      (when (typep condition 'type-error)
-        (format s "datum=~a expected=~s~%"
-                (%safe-object-id (type-error-datum condition))
-                (ignore-errors (type-error-expected-type condition))))
-      (dolist (line (%safe-call-history-lines 60))
-        (write-line line s))
-      (terpri s)
-      (force-output s))))
 
 (defun maybe-log-callback-error (condition)
   (when *log-callback-errors*
@@ -255,15 +219,15 @@
       (ignore-errors (clear-output *debug-io*))
       (ignore-errors (format *debug-io* "~&Lisp error: ~s" (or emsg condition)))
       (when (eq *log-callback-errors* :backtrace)
-        ;; Prefer frame-only on arm64 even if someone forces :backtrace.
-        (let* ((detailed #+arm64-target nil #-arm64-target t)
-               (err (nth-value 1 (ignore-errors
-                                   (ccl:print-call-history :detailed-p detailed)))))
+        (let* ((err (nth-value 1 (ignore-errors
+                                   (ccl:print-call-history :detailed-p t)))))
           (when err
             (ignore-errors (format *debug-io* "~&Error printing call history - "))
             (ignore-errors (print err *debug-io*))
             (ignore-errors (princ err *debug-io*))
-            (ignore-errors (force-output *debug-io*))))))))(defmacro with-callback-context (description &body body)
+            (ignore-errors (force-output *debug-io*))))))))
+
+(defmacro with-callback-context (description &body body)
   (let ((saved-debug-io (gensym)))
     `(ccl::with-standard-abort-handling ,(format nil "Abort ~a" description)
        (let ((,saved-debug-io *debug-io*))
@@ -322,66 +286,10 @@
   (%make-nsstring (double-%-in (or (ignore-errors (princ-to-string cond))
                                    "#<error printing error message>"))))
 
-;;; Darwin/arm64: log CLASS-OF failures before signaling.  The Hemlock sheet
-;;; often IS no-class-error; without a frame-only BT we cannot fix the root.
-(defvar *%original-no-class-error* nil)
-(defvar *%logging-no-class-error* nil)
-
-(defun %safe-frame-name (lfun)
-  (or (ignore-errors (function-name lfun))
-      (ignore-errors (ccl::%lfun-name-string lfun))
-      (ignore-errors (princ-to-string lfun))
-      "<fn>"))
-
-(defun %safe-call-history-lines (&optional (count 60))
-  "Frame names only — never format stack slot values (BOGUS → CLASS-OF loop)."
-  (let ((i 0) (lines '()))
-    (ignore-errors
-      (ccl:map-call-frames
-       (lambda (p context)
-         (declare (ignore context))
-         (when (< i count)
-           (multiple-value-bind (lfun pc) (ccl::cfp-lfun p)
-             (push (format nil "  ~d ~a pc=~a"
-                           i
-                           (if lfun (%safe-frame-name lfun) "<non-function>")
-                           pc)
-                   lines))
-           (incf i)))
-       :count count
-       :test nil))
-    (nreverse lines)))
-
-(defun %install-no-class-error-logger (&key force)
-  (when (and force *%original-no-class-error*)
-    (setf (fdefinition 'ccl::no-class-error) *%original-no-class-error*)
-    (setq *%original-no-class-error* nil))
-  (unless *%original-no-class-error*
-    (setq *%original-no-class-error* (fdefinition 'ccl::no-class-error))
-    (setf (fdefinition 'ccl::no-class-error)
-          (lambda (x)
-            (unless *%logging-no-class-error*
-              (let ((*%logging-no-class-error* t))
-                (ignore-errors
-                  (with-open-file (s "/tmp/ccl-no-class-error.log" :direction :output
-                                     :if-exists :append :if-does-not-exist :create)
-                    (format s "~&==== ~a id=~a proc=~s ====~%"
-                            (get-universal-time)
-                            (%safe-object-id x)
-                            (ignore-errors (process-name *current-process*)))
-                    (format s "whostate=~s~%"
-                            (ignore-errors (process-whostate *current-process*)))
-                    (dolist (line (%safe-call-history-lines 60))
-                      (write-line line s))
-                    (terpri s)
-                    (force-output s)))))
-            ;; Re-signal with a BOGUS-safe message (avoid ~s on the datum in
-            ;; case write-internal/class-of recurses on some corrupt headers).
-            (error "Bug (probably): can't determine class of object ~a"
-                   (%safe-object-id x))))))
-(%install-no-class-error-logger)
-
-
+;;; Diagnostic loggers for the open darwinarm64 BOGUS-object issue
+;;; (no-class-error / Hemlock condition logs) live in
+;;; tools/ide-debug-loggers.lisp — load explicitly when debugging;
+;;; nothing here writes to /tmp or redefines error reporting.
 
 (defun assume-cocoa-thread ()
   (assert (eq *current-process* ccl::*initial-process*)))

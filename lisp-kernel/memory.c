@@ -103,6 +103,11 @@ darwin_arm64_jit_init_code_vector(void *dest, unsigned long long header, size_t 
     memcpy(dest, &header, sizeof(header));
   }
   pthread_jit_write_protect_np(1);
+  /* Keep I/D coherent even before code bytes arrive via
+     darwin_arm64_jit_install_code (zeroed payload = udf #0 sentinels). */
+  if (total_bytes) {
+    sys_icache_invalidate(dest, total_bytes);
+  }
 }
 #endif
 
@@ -432,7 +437,8 @@ MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int f
      image section / trailer ("nepOILCMegam") into the heap free zone and
      breaks walk-dynamic-area's zero-cons bridge to the sentinel. */
   {
-    size_t count, total = 0;
+    ssize_t count;
+    size_t total = 0;
     off_t opos;
     natural map_bytes = align_to_power_of_2(nbytes, log2_page_size);
 
@@ -452,7 +458,7 @@ MapFile(LogicalAddress addr, natural pos, natural nbytes, int permissions, int f
       if (count == 0) {
         break;                  /* EOF: remainder already zero */
       }
-      total += count;
+      total += (size_t)count;
     }
     LSEEK(fd, opos, SEEK_SET);
     return true;
