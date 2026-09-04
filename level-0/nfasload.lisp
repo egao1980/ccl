@@ -1073,7 +1073,8 @@
 
 
 ;;; A symbol-tagged package-hash-table cell whose pname is not a simple
-;;; string means heap corruption.  Fail loudly instead of silently
+;;; string means heap corruption (observed during darwinarm64 bring-up:
+;;; dangling pname => BOGUS object).  Fail loudly instead of silently
 ;;; skipping the cell — silent skips let the corruption spread to the
 ;;; next GC/purify cycle unobserved.  The message avoids printing the
 ;;; object itself (CLASS-OF on a corrupt header would recurse).

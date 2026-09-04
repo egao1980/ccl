@@ -124,8 +124,11 @@
 (defun %make-recursive-lock-ptr ()
   (record-system-lock
    (let ((p (make-gcable-macptr $flags_DisposeRecursiveLock)))
-     ;; %setf-macptr sets p's own address; (setf (%get-ptr p) ...) would
-     ;; store through p's (still null) foreign address.
+     ;; (%setf-macptr p (ff-call … :address)) — NOT (setf (%get-ptr p) …).
+     ;; The latter stores *through* p's foreign address (null here).
+     ;; Darwin bring-up: "mov x9,rnil" fatals were from bootstrapping
+     ;; without reloading acode-rewrite after nxenv (aapcs64-ff-call
+     ;; rewrite missing), not from %setf-macptr itself.
      (%setf-macptr p
                    (ff-call (%kernel-import target::kernel-import-new-recursive-lock)
                             :address))

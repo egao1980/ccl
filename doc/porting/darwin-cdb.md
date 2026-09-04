@@ -14,9 +14,9 @@
 | **quartzcore** | Regenerated arm64 ObjC (QuartzCore.h; ~340 objc-classes) |
 | other | Still x86 bring-up copies |
 
-Helpers: `tools/darwin-arm64-cdb/`. Needs a sibling checkout of
-[Clozure/ccl-ffigen](https://github.com/Clozure/ccl-ffigen). Local
-ffigen5 patch maps `CXType_Half`/`Float16` → `float`.
+Helpers: `tools/darwin-arm64-cdb/`. Needs
+[Clozure/ccl-ffigen](https://github.com/Clozure/ccl-ffigen) (workspace:
+`ccl-ffigen/`). Local ffigen5 patch maps `CXType_Half`/`Float16` → `float`.
 
 ## math.h fix
 

@@ -4,8 +4,8 @@
 #   ./tools/run-darwin-purify-smoke.sh
 #
 # Leaves production darm64cl.image alone.  Exit 0 only if child prints
-# DARWIN-PURIFY-SMOKE-OK.  Hard wall-clock timeouts so unattended runs
-# never hang (exit 124 on timeout).
+# DARWIN-PURIFY-SMOKE-OK.  Hard wall-clock timeouts so agents never wait
+# forever (exit 124 on timeout).
 
 set -e
 CCL_DIR=$(cd "$(dirname "$0")/.." && pwd)

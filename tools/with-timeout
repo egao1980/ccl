@@ -2,7 +2,7 @@
 # Run a command with a hard wall-clock timeout.
 # Usage: with-timeout SECONDS command [args...]
 # Exit: command's status, or 124 on timeout (GNU timeout convention).
-# Prints TIMEOUT: … to stderr so the caller sees why the run stopped.
+# Prints TIMEOUT: … to stderr so agents see why they stopped.
 #
 # Process model (portable perl path):
 #   - Child runs in its own process group so timeout can kill the whole tree.
